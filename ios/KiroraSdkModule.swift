@@ -40,7 +40,8 @@ final class KiroraSdkModule: RCTEventEmitter, @unchecked Sendable {
         self?.requestToken(requestId)
     }
 
-    @objc static func requiresMainQueueSetup() -> Bool { false }
+    // `override`: RCTEventEmitter already answers this (React Native 0.88 requires the keyword).
+    @objc override static func requiresMainQueueSetup() -> Bool { false }
 
     override func supportedEvents() -> [String]! {
         [Self.tokenRequestEvent, Self.foregroundEvent, Self.deepLinkEvent, Self.clickedEvent, Self.receivedEvent,
