@@ -1,5 +1,8 @@
 export type LogLevel = 'none' | 'error' | 'debug';
 
+/** Why `onAuthenticationFailed` was called. Same values on every Kirora SDK. */
+export type AuthenticationFailureReason = 'fetch_failed' | 'refused';
+
 /** The answers of `requestPushPermission()`. Same values on every Kirora SDK. */
 export type PushPermission = 'granted' | 'denied' | 'unanswered' | 'unsupported';
 
@@ -20,8 +23,8 @@ export interface KiroraPushOptions {
   /** Android: accent colour of notifications (`#RRGGBB`). */
   accentColor?: string;
   /** Android: id and name of the default channel the SDK creates at start (`kirora_default`, `Notifications`). */
-  channelId?: string;
-  channelName?: string;
+  defaultChannelId?: string;
+  defaultChannelName?: string;
   /**
    * Decides whether a Kirora push is shown while the app is open. It is shown by default; return
    * `false` to hold one back. Must answer within about 1.5 s, or the push is shown.
@@ -45,6 +48,15 @@ export interface KiroraOptions {
    * Kirora refuses an expired one. One that hasn't answered after 30 seconds counts as failed.
    */
   fetchUserToken?: () => Promise<string | null | undefined>;
+  /**
+   * Called when the user's token fails outside a method call (a send in the background):
+   * `fetch_failed` when `fetchUserToken` threw, gave no token or didn't answer in time, `refused`
+   * when Kirora refused a fresh one. Once per failure, not per retry: again only after a request
+   * with the user's token succeeded or `identify()` was called. Never for a failure `identify()`
+   * or `setPushConsent()` rejects with, nor while signing out. Ask the user to sign in again, or
+   * call `identify()` once your session is fixed.
+   */
+  onAuthenticationFailed?: (reason: AuthenticationFailureReason) => void;
   /** `true`, or options: register this device for push. */
   push?: boolean | KiroraPushOptions;
   /**
@@ -66,11 +78,15 @@ export interface KiroraOptions {
    * with fields changed or removed, or `null` to drop it. It must answer at once: an error, a
    * promise or values JSON can't hold drop the event. The native SDK's automatic events
    * (`Session Started`, lifecycle events) carry no app values and don't pass through it.
+   * Never called while tracking consent is refused: those events are dropped before it.
+   * Until the native SDK has answered whether a remembered choice allows tracking (just after
+   * start), the app's events wait for that answer before it runs.
    */
   beforeSend?: (event: BeforeSendEvent) => BeforeSendEvent | null;
   /**
-   * Called with a push's link when it is tapped; return `true` when the app opened it itself.
-   * Otherwise the native SDK opens it. Asked across the bridge: answer within 1.5 s.
+   * Called with a push's link when it is tapped; return (or resolve to) `true` when the app
+   * opened it itself. Otherwise the native SDK opens it. Asked across the bridge: answer within
+   * 1.5 s, or the native SDK opens the link itself.
    */
-  handleDeepLink?: (url: string) => boolean;
+  handleDeepLink?: (url: string) => boolean | Promise<boolean>;
 }

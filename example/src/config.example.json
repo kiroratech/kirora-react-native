@@ -1,0 +1,7 @@
+{
+  "apiUrl": "https://api.kirora.io",
+  "clientKey": "kirora_pk_REPLACE_ME",
+  "userToken": "",
+  "pushEnabled": false,
+  "pushAppId": ""
+}

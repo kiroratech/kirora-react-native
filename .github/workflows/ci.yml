@@ -1,0 +1,135 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
+  pull_request:
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
+  workflow_dispatch:
+    inputs:
+      native_sdk_ref:
+        description: Branch, tag or commit of kirora-android and kirora-ios to build against
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The native Kirora SDKs aren't published yet: each native job builds them from their repos.
+  NATIVE_SDK_REF: ${{ inputs.native_sdk_ref || 'main' }}
+
+jobs:
+  js:
+    name: TypeScript and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # Also builds the package (its `prepare` script).
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test -- --ci
+
+  android:
+    name: Android (e2e-app)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: kiroratech/kirora-android
+          ref: ${{ env.NATIVE_SDK_REF }}
+          path: kirora-android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            e2e-app/package-lock.json
+      - name: Publish the Kirora Android SDK to Maven Local
+        working-directory: kirora-android
+        run: ./gradlew :kirora-sdk:publishToMavenLocal :kirora-sdk-push:publishToMavenLocal
+      - run: npm ci
+      - name: Install the e2e app
+        working-directory: e2e-app
+        run: npm ci
+      - name: Build the e2e app (compiles the module) and run the bridge unit tests
+        working-directory: e2e-app/android
+        # One ABI is enough to prove the module compiles.
+        run: ./gradlew :app:assembleDebug :kirora_react-native:testDebugUnitTest -PreactNativeArchitectures=x86_64
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: android-reports
+          path: |
+            e2e-app/android/**/build/reports/
+            android/build/reports/
+            android/build/test-results/
+
+  ios:
+    name: iOS (e2e-app)
+    # macOS minutes cost ten times more: only once the cheap checks pass.
+    needs: js
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: kiroratech/kirora-ios
+          ref: ${{ env.NATIVE_SDK_REF }}
+          path: kirora-ios
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            e2e-app/package-lock.json
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          working-directory: e2e-app
+          bundler-cache: true
+      - run: npm ci
+      - name: Install the e2e app
+        working-directory: e2e-app
+        run: npm ci
+      - name: Install pods (Kirora from the checkout)
+        working-directory: e2e-app/ios
+        env:
+          KIRORA_IOS_PATH: ${{ github.workspace }}/kirora-ios
+          # React Native's prebuilt core, instead of compiling it on every run.
+          RCT_USE_PREBUILT_RNCORE: 1
+          RCT_USE_RN_DEP: 1
+        run: bundle exec pod install
+      - name: Build the e2e app for the simulator (compiles the module)
+        working-directory: e2e-app/ios
+        run: |
+          xcodebuild build \
+            -workspace KiroraExample.xcworkspace \
+            -scheme KiroraExample \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            ONLY_ACTIVE_ARCH=YES ARCHS=arm64 \
+            CODE_SIGNING_ALLOWED=NO \
+            > xcodebuild.log 2>&1 || { grep -E 'error:' xcodebuild.log; exit 1; }
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ios-build-log
+          path: e2e-app/ios/xcodebuild.log
