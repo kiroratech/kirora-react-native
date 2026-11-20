@@ -19,16 +19,20 @@ android {
     targetCompatibility JavaVersion.VERSION_11
   }
 
-  kotlinOptions {
-    jvmTarget = '11'
+  testOptions {
+    unitTests.includeAndroidResources = true
   }
+}
+
+// React Native's Gradle plugin (0.74+) may raise Java to 17: Kotlin follows whatever Java level the
+// module ends up with, or the build fails with "Inconsistent JVM Target Compatibility".
+afterEvaluate {
+  android.kotlinOptions.jvmTarget = android.compileOptions.targetCompatibility.toString()
 }
 
 repositories {
   google()
   mavenCentral()
-  // Development: the Kirora Android SDK is published here by `./gradlew publishToMavenLocal`.
-  mavenLocal()
 }
 
 def kiroraSdkVersion = safeExtGet('kiroraAndroidSdkVersion', '0.1.0')
@@ -38,4 +42,10 @@ dependencies {
   // The core SDK, and the Firebase side of push (FCM service, notification permission).
   api "com.kirora:android-sdk:${kiroraSdkVersion}"
   implementation "com.kirora:android-sdk-push:${kiroraSdkVersion}"
+
+  // KiroraSdkModuleTest: run from a host app build, which supplies react-android.
+  testImplementation 'junit:junit:4.13.2'
+  testImplementation 'androidx.test:core:1.7.0'
+  testImplementation 'org.robolectric:robolectric:4.17'
+  testImplementation 'org.mockito:mockito-core:5.14.2'
 }

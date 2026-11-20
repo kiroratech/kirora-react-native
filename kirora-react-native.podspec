@@ -10,7 +10,7 @@ Pod::Spec.new do |s|
   s.version        = package['version']
   s.summary        = package['description']
   s.homepage       = 'https://github.com/kiroratech/kirora-react-native'
-  s.license        = package['license']
+  s.license        = { :type => package['license'], :file => 'LICENSE' }
   s.author         = 'Kirora'
   s.source         = { :git => 'https://github.com/kiroratech/kirora-react-native.git', :tag => s.version.to_s }
 

@@ -4,16 +4,16 @@ Track signed-in users' app activity and connect their devices to Kirora push not
 The package exposes one TypeScript API backed by Kirora's native Android and iOS SDKs.
 Native code owns event storage, sessions, consent, retries and notification handling.
 
-**Preview: 0.1.0.** The findings of the [review](docs/review.md) are fixed; it lists what
-remains unverified (device, push and host-app builds). Validate the exact native artifacts
-used by your host app. Successful JavaScript calls alone do not establish delivery.
+**Preview: 0.1.0.** Tested on an Android emulator against a fake Kirora API; iOS builds,
+physical devices and push delivery are unverified. Validate the exact native artifacts used by
+your host app. Successful JavaScript calls alone do not establish delivery.
 
 ## Requirements and installation
 
 | Component | Current declaration and limits |
 | --- | --- |
 | React Native | Peer dependency `>=0.71.0`; the full version/architecture range has not been verified. The implementation uses legacy native-module APIs through React Native's interoperability layer. |
-| Android | Native Kirora SDK requires API 24+. Wrapper `compileSdk` defaults to 35 and accepts host overrides; resolved dependencies and your RN version may require higher settings. |
+| Android | Runs on API 24+. Compile with `compileSdkVersion` 35 or later: the native SDK's AndroidX dependencies need it. |
 | iOS | Podspec declares iOS 13+ and Swift 5.9. Use the higher deployment minimum required by your React Native/Xcode combination. |
 | Expo | A native development build is required. Expo Go cannot load this package's native modules. No Expo config plugin is included. |
 | Native releases | Android defaults to Kirora `0.1.0`; iOS depends on `Kirora ~> 0.1`. Verify the resolved artifacts contain the fixes needed by your app. |
@@ -41,11 +41,22 @@ presenting integration success.
 
 Android links both `com.kirora:android-sdk` and `com.kirora:android-sdk-push`, even when
 push is disabled in JavaScript. The latter brings Firebase Messaging and the notification
-permission into the app. The wrapper searches `mavenLocal()` for development artifacts.
-From your Kirora Android SDK checkout:
+permission into the app. Until they are published, publish them to Maven Local from your
+Kirora Android SDK checkout:
 
 ```sh
 ./gradlew :kirora-sdk:publishToMavenLocal :kirora-sdk-push:publishToMavenLocal
+```
+
+Then let your app's `android/build.gradle` resolve Kirora's packages from Maven Local. The app
+resolves the wrapper's dependencies from its own repositories, not the wrapper's.
+
+```groovy
+allprojects {
+    repositories {
+        mavenLocal { content { includeGroup "com.kirora" } }
+    }
+}
 ```
 
 The host root project's `ext.kiroraAndroidSdkVersion` can override the default native
@@ -117,6 +128,23 @@ A token-provider request has a native 30-second round-trip limit. Requests carry
 native code decides whether an answer is still current. Android's current native SDK
 also supports proactive token refresh; it is not a separate React Native option.
 
+When the token fails outside a method call (a background send), `onAuthenticationFailed`
+says why: `fetch_failed` when `fetchUserToken` threw, gave no token or didn't answer in
+time, `refused` when Kirora refused a fresh token. It's called once per failure, not per
+retry: again only after a request with the user's token succeeded or `identify()` was
+called. Never for a failure `identify()` or `setPushConsent()` rejects with, and not while
+signing out. Events keep waiting on the device meanwhile.
+
+```ts
+const kirora = new Kirora({
+  clientKey: 'kirora_pk_…',
+  fetchUserToken: () => myServer.kiroraToken(),
+  onAuthenticationFailed: (reason) => {
+    // 'fetch_failed' or 'refused': restore your session, then call identify() again.
+  },
+});
+```
+
 Events captured before sign-in remain on the device and are adopted by the next
 identified user; they are not sent anonymously. Native SDKs own association of captured
 events with identities. A direct user switch must preserve the old user's event
@@ -174,9 +202,8 @@ await kirora.flush();
 ```
 
 Flush attempts delivery without intentionally bypassing consent or server Retry-After.
-It is not a delivery receipt. Verify your resolved native artifacts against the backend before release. During the
-review, a stale Android artifact was replaced and the refreshed context passed schema
-validation (R06); neither check establishes live delivery.
+It is not a delivery receipt. Verify your resolved native artifacts against the backend
+before release. Neither a successful call nor a schema check establishes live delivery.
 
 ### Redact app properties before native storage
 
@@ -194,6 +221,10 @@ const kirora = new Kirora({
 });
 ```
 
+Copy and delete as above rather than destructuring (`const { email, ...rest } = …`): React
+Native's Babel turns a `__proto__` property into the copy's prototype there, and an answer that
+is not a plain object drops the event.
+
 `beforeSend` runs synchronously in JavaScript on explicit `track`/`trackScreenView`
 events before forwarding. Return the event or null to drop it. A promise is not a
 supported answer. Event name is retained by the SDK.
@@ -201,9 +232,10 @@ supported answer. Event name is retained by the SDK.
 The hook receives **empty context**; native code adds automatic context later, and the
 wrapper ignores returned context. It cannot redact native device/session context.
 Native automatic session/lifecycle events do not pass through this wrapper hook, as the
-shared wrapper contract permits. The JS hook is not a consent gate and can be invoked
-before native code rejects an event for disallowed tracking. Do not give it unrelated
-collection/network side effects or use it to infer a consent grant.
+shared wrapper contract permits. It never sees an event while tracking consent is
+refused: such events are dropped before it. Just after start, until native code has said
+whether a remembered choice allows tracking, the app's events wait for that answer before
+the hook runs. Do not give it unrelated collection/network side effects.
 
 ## Consent and device push settings
 
@@ -274,8 +306,8 @@ Android appearance options are resource names/strings, not numeric native resour
 push: {
   smallIcon: 'ic_notification',
   accentColor: '#FF5500',
-  channelId: 'kirora_default',
-  channelName: 'Notifications',
+  defaultChannelId: 'kirora_default',
+  defaultChannelName: 'Notifications',
   onForegroundNotification: (data) => data.plan !== 'muted',
 }
 ```
@@ -322,6 +354,9 @@ offClick();
 offReceived();
 ```
 
+A tap reaches `onNotificationClicked` after the native SDK reported it, so the listener
+may run up to 1.5 seconds after the tap.
+
 Notification values are strings; structured sender data such as buttons is JSON text.
 iOS's `aps` is omitted from this callback data. Treat payload values and URLs as untrusted.
 `onForegroundNotification` is available on both native bridges, may return a promise,
@@ -330,7 +365,8 @@ and must answer within about 1.5 seconds. No timely answer means native default 
 ### Route push links once
 
 Provide `handleDeepLink` when constructing the client. The example's `routeAppUrl` is
-your existing synchronous router operation, ready before you return true:
+your existing router operation, ready before you return true. The handler may also be
+`async` and resolve to true or false:
 
 ```ts
 handleDeepLink: (url) => {
@@ -340,8 +376,8 @@ handleDeepLink: (url) => {
 }
 ```
 
-Return true only when the app handled the URL; otherwise native code uses its fallback.
-Keep this callback synchronous and fast. Validate the complete URL scheme/host/path for
+Return (or resolve to) true only when the app handled the URL; otherwise native code uses
+its fallback. Answer fast: after 1.5 seconds native code opens the link itself. Validate the complete URL scheme/host/path for
 your real routes. Do not open the same URL again in `onNotificationClicked`.
 
 Native launch handling holds a cold-start tap's link for initial wrapper configuration
@@ -383,7 +419,7 @@ The installation ID is random, not an advertising/hardware ID. Core event contex
 the shared contract: installation ID, session, locale/timezone and library, plus approved
 mobile app, OS, screen and device manufacturer/model/type fields as native releases adopt
 them. Network details are not part of the current contract. Older preview artifacts have
-different collection behavior, as R06 records. Verify the actual native artifact before
+different collection behavior. Verify the actual native artifact before
 making collection disclosures. Push registration
 includes app/OS versions, locale/timezone and the platform token. Influenced app-open
 times are behavioural and follow tracking consent; push delivery and tap reports are
@@ -410,18 +446,21 @@ npm run build
 npm pack --ignore-scripts
 ```
 
-Build before packing so `lib/` contains JS and declarations. The repository's Jest suite
-is available through `npm test`, with regressions for each review finding.
-There is no bundled native example host or native build CI matrix in this checkout.
-Build your consuming Android/iOS app to validate autolinking, dependency resolution,
+Build before packing so `lib/` contains JS and declarations. `npm test` runs the Jest suite.
+
+- `example/`: a demo app to try the SDK on an Android device against a Kirora workspace (see its
+  README).
+- `e2e-app/`: a test host. CI (`.github/workflows/ci.yml`) builds it for Android and the iOS
+  simulator and runs the Android bridge unit tests; `e2e-app/e2e/` runs it on an Android
+  emulator against a fake Kirora API (see its README).
+
+Still build your consuming Android/iOS app to validate autolinking, dependency resolution,
 architecture support and push setup.
 
-The [review](docs/review.md) records exactly what passed: TypeScript build/typecheck,
-package inspection, standalone probes, Android bridge source compilation, Swift parsing
-and podspec syntax. Full iOS linking, native host/device execution and production
-publication remain unverified. The shared [SDK contract](../../omnichannel/docs/sdk-interface.md)
-is the authority for intended cross-platform behavior.
+Verified so far: TypeScript build/typecheck and tests, the Android bridge unit tests, Android
+builds of both apps, and the e2e scenarios on an Android emulator. iOS builds, physical
+devices, push delivery and production publication remain unverified.
 
 ## License
 
-The package currently declares `UNLICENSED`. No open source license grant is included.
+MIT. See [LICENSE](LICENSE).

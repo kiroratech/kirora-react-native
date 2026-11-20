@@ -1,0 +1,30 @@
+buildscript {
+    ext {
+        buildToolsVersion = "37.0.0"
+        minSdkVersion = 24
+        compileSdkVersion = 37
+        targetSdkVersion = 36
+        ndkVersion = "28.2.13676358"
+        kotlinVersion = "2.2.0"
+    }
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath("com.android.tools.build:gradle")
+        classpath("com.facebook.react:react-native-gradle-plugin")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin")
+        classpath("com.google.gms:google-services:4.4.2")
+    }
+}
+
+// Development: the Kirora Android SDK is published here by
+// `./gradlew publishToMavenLocal` in kirora-android (it isn't on a public repository yet).
+allprojects {
+    repositories {
+        mavenLocal { content { includeGroup "com.kirora" } }
+    }
+}
+
+apply plugin: "com.facebook.react.rootproject"

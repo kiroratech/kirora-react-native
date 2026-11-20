@@ -2,6 +2,7 @@ export { Kirora } from './Kirora';
 export { KiroraApiError, KiroraError, UserTokenError } from './errors';
 export type { KiroraState } from './backend';
 export type {
+  AuthenticationFailureReason,
   KiroraOptions,
   KiroraPushOptions,
   NotificationData,

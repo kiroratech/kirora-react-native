@@ -11,6 +11,7 @@ import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.kirora.androidsdk.Kirora
 import com.kirora.androidsdk.KiroraInternalApi
+import com.kirora.androidsdk.model.AuthFailureReason
 import com.kirora.androidsdk.model.KiroraApiError
 import com.kirora.androidsdk.model.KiroraOptions
 import com.kirora.androidsdk.model.KiroraPushOptions
@@ -28,6 +29,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Hands the JavaScript `Kirora` class to the native Kirora Android SDK, which does the work. The
@@ -38,7 +40,11 @@ import java.util.concurrent.ConcurrentHashMap
  * no callback). `beforeSend` runs in JavaScript before [track] is called.
  */
 @OptIn(KiroraInternalApi::class)
-class KiroraSdkModule(private val reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
+class KiroraSdkModule(
+    private val reactContext: ReactApplicationContext,
+    /** Makes the maps sent to JavaScript; unit tests pass `::JavaOnlyMap`, which needs no native code. */
+    private val newMap: () -> WritableMap = Arguments::createMap
+) : ReactContextBaseJavaModule(reactContext) {
 
     override fun getName() = "KiroraSdk"
 
@@ -50,6 +56,9 @@ class KiroraSdkModule(private val reactContext: ReactApplicationContext) : React
 
     @Volatile
     private var kirora: Kirora? = null
+
+    /** JavaScript subscriptions to this module's events: none means nothing would hear one. */
+    private val listeners = AtomicInteger(0)
 
     private val clickListener: (Map<String, String>) -> Unit = { data -> emit(CLICKED_EVENT, data.toWritableMap()) }
     private val receivedListener: (Map<String, String>) -> Unit = { data -> emit(RECEIVED_EVENT, data.toWritableMap()) }
@@ -81,6 +90,7 @@ class KiroraSdkModule(private val reactContext: ReactApplicationContext) : React
                 KiroraOptions(
                     clientKey = options.stringOrNull("clientKey") ?: "",
                     fetchUserToken = provider,
+                    onAuthenticationFailed = if (options.flag("hasAuthenticationFailedHandler")) ::authenticationFailed else null,
                     push = push,
                     requireTrackingConsent = options.getBoolean("requireTrackingConsent"),
                     trackSessions = options.getBoolean("trackSessions"),
@@ -94,7 +104,8 @@ class KiroraSdkModule(private val reactContext: ReactApplicationContext) : React
                 )
             )
             this.kirora = kirora
-            promise.resolve(null)
+            // Whether tracking is allowed now, so JavaScript's beforeSend never sees an event it isn't.
+            promise.resolve(newMap().apply { putBoolean("trackingConsent", kirora.trackingConsent) })
         } catch (e: Exception) {
             promise.reject("CONFIGURE_ERROR", e.message, e)
         }
@@ -189,7 +200,7 @@ class KiroraSdkModule(private val reactContext: ReactApplicationContext) : React
             } catch (_: Exception) {
                 return@launch promise.resolve(null)
             }
-            promise.resolve(Arguments.createMap().apply {
+            promise.resolve(newMap().apply {
                 putBoolean("isInitialized", state.isInitialized)
                 putBoolean("isIdentified", state.isIdentified)
                 putString("deviceId", state.deviceId)
@@ -240,10 +251,14 @@ class KiroraSdkModule(private val reactContext: ReactApplicationContext) : React
 
     // NativeEventEmitter calls these when JavaScript starts and stops listening.
     @ReactMethod
-    fun addListener(eventName: String) {}
+    fun addListener(eventName: String) {
+        listeners.incrementAndGet()
+    }
 
     @ReactMethod
-    fun removeListeners(count: Double) {}
+    fun removeListeners(count: Double) {
+        listeners.updateAndGet { maxOf(0, it - count.toInt()) }
+    }
 
     override fun invalidate() {
         pendingTokens.values.forEach { it.cancel() }
@@ -264,7 +279,9 @@ class KiroraSdkModule(private val reactContext: ReactApplicationContext) : React
         val answer = CompletableDeferred<String?>()
         pendingTokens[id] = answer
         try {
-            emit(TOKEN_REQUEST_EVENT, Arguments.createMap().apply { putString("requestId", id) })
+            if (!emit(TOKEN_REQUEST_EVENT, newMap().apply { putString("requestId", id) })) {
+                throw IllegalStateException("No fetchUserToken is listening")
+            }
             // A plain exception, not a cancellation, so the SDK reports it as a UserTokenError.
             return withTimeoutOrNull(TOKEN_TIMEOUT_MS) { answer.await() }
                 ?: throw IllegalStateException("fetchUserToken got no answer within ${TOKEN_TIMEOUT_MS / 1000} seconds")
@@ -282,13 +299,14 @@ class KiroraSdkModule(private val reactContext: ReactApplicationContext) : React
         val answer = CompletableDeferred<Boolean>()
         pendingAnswers[id] = answer
         return try {
-            emit(event, Arguments.createMap().apply {
+            val sent = emit(event, newMap().apply {
                 putString("requestId", id)
                 // When this ask stops waiting: JavaScript doesn't run the app's callback after it,
                 // since the fallback has acted by then (a link already opened, say).
                 putDouble("expiresAt", (System.currentTimeMillis() + ANSWER_TIMEOUT_MS).toDouble())
                 body()
             })
+            if (!sent) return fallback
             withTimeoutOrNull(ANSWER_TIMEOUT_MS) { answer.await() } ?: fallback
         } catch (e: CancellationException) {
             throw e
@@ -299,8 +317,26 @@ class KiroraSdkModule(private val reactContext: ReactApplicationContext) : React
         }
     }
 
-    private fun emit(event: String, params: Any?) {
-        reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java).emit(event, params)
+    private fun authenticationFailed(reason: AuthFailureReason) {
+        val wire = when (reason) {
+            AuthFailureReason.FETCH_FAILED -> "fetch_failed"
+            AuthFailureReason.REFUSED -> "refused"
+        }
+        emit(AUTHENTICATION_FAILED_EVENT, newMap().apply { putString("reason", wire) })
+    }
+
+    /**
+     * Sends [event] to JavaScript: false, sending nothing, when nothing listens or there is no
+     * live React instance (a reload, a teardown), as iOS skips them.
+     */
+    private fun emit(event: String, params: Any?): Boolean {
+        if (listeners.get() == 0 || !reactContext.hasActiveReactInstance()) return false
+        return try {
+            reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java).emit(event, params)
+            true
+        } catch (_: RuntimeException) {
+            false
+        }
     }
 
     private fun pushOptions(options: ReadableMap): KiroraPushOptions {
@@ -321,12 +357,12 @@ class KiroraSdkModule(private val reactContext: ReactApplicationContext) : React
             pushAppId = options.stringOrNull("pushAppId"),
             smallIconResId = icon,
             accentColor = color,
-            defaultChannelId = options.stringOrNull("channelId") ?: "kirora_default",
-            defaultChannelName = options.stringOrNull("channelName") ?: "Notifications"
+            defaultChannelId = options.stringOrNull("defaultChannelId") ?: "kirora_default",
+            defaultChannelName = options.stringOrNull("defaultChannelName") ?: "Notifications"
         )
     }
 
-    private fun Map<String, String>.toWritableMap() = Arguments.createMap().also { map ->
+    private fun Map<String, String>.toWritableMap() = newMap().also { map ->
         forEach { (k, v) -> map.putString(k, v) }
     }
 
@@ -357,7 +393,7 @@ class KiroraSdkModule(private val reactContext: ReactApplicationContext) : React
     private fun reject(promise: Promise, e: Exception) {
         when (e) {
             is UserTokenError -> promise.reject("USER_TOKEN_ERROR", e.message, e)
-            is KiroraApiError -> promise.reject("KIRORA_API_ERROR", e.message, e, Arguments.createMap().apply {
+            is KiroraApiError -> promise.reject("KIRORA_API_ERROR", e.message, e, newMap().apply {
                 putInt("status", e.status)
                 if (e.code != null) putString("code", e.code) else putNull("code")
                 val retryAfter = e.retryAfterMs
@@ -386,6 +422,7 @@ class KiroraSdkModule(private val reactContext: ReactApplicationContext) : React
         const val DEEP_LINK_EVENT = "KiroraDeepLink"
         const val CLICKED_EVENT = "KiroraNotificationClicked"
         const val RECEIVED_EVENT = "KiroraNotificationReceived"
+        const val AUTHENTICATION_FAILED_EVENT = "KiroraAuthenticationFailed"
         const val TOKEN_TIMEOUT_MS = 30_000L
         const val ANSWER_TIMEOUT_MS = 1_500L
         const val SDK_NAME = "kirora-react-native"

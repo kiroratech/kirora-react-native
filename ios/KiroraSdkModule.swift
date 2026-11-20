@@ -24,6 +24,7 @@ final class KiroraSdkModule: RCTEventEmitter, @unchecked Sendable {
     static let deepLinkEvent = "KiroraDeepLink"
     static let clickedEvent = "KiroraNotificationClicked"
     static let receivedEvent = "KiroraNotificationReceived"
+    static let authenticationFailedEvent = "KiroraAuthenticationFailed"
     /// The SDK stops waiting after this too; answers after it are dropped.
     static let callbackTimeout: TimeInterval = 1.5
 
@@ -39,10 +40,12 @@ final class KiroraSdkModule: RCTEventEmitter, @unchecked Sendable {
         self?.requestToken(requestId)
     }
 
-    @objc static func requiresMainQueueSetup() -> Bool { false }
+    // `override`: RCTEventEmitter already answers this (React Native 0.88 requires the keyword).
+    @objc override static func requiresMainQueueSetup() -> Bool { false }
 
     override func supportedEvents() -> [String]! {
-        [Self.tokenRequestEvent, Self.foregroundEvent, Self.deepLinkEvent, Self.clickedEvent, Self.receivedEvent]
+        [Self.tokenRequestEvent, Self.foregroundEvent, Self.deepLinkEvent, Self.clickedEvent, Self.receivedEvent,
+         Self.authenticationFailedEvent]
     }
 
     override func startObserving() { locked { listening = true } }
@@ -77,9 +80,14 @@ final class KiroraSdkModule: RCTEventEmitter, @unchecked Sendable {
         if flag("hasTokenProvider") {
             fetchUserToken = { try await requests.fetchUserToken() }
         }
+        var onAuthenticationFailed: (@MainActor @Sendable (AuthenticationFailureReason) -> Void)?
+        if flag("hasAuthenticationFailedHandler") {
+            onAuthenticationFailed = { [weak self] reason in self?.authenticationFailed(reason) }
+        }
         let kiroraOptions = KiroraOptions(
             clientKey: string("clientKey") ?? "",
             fetchUserToken: fetchUserToken,
+            onAuthenticationFailed: onAuthenticationFailed,
             push: push,
             requireTrackingConsent: flag("requireTrackingConsent"),
             trackSessions: (options["trackSessions"] as? Bool) ?? true,
@@ -110,7 +118,8 @@ final class KiroraSdkModule: RCTEventEmitter, @unchecked Sendable {
         previous?.destroy()
         let created = Kirora(options: kiroraOptions)
         locked { kirora = created }
-        resolve(nil)
+        // Whether tracking is allowed now, so JavaScript's beforeSend never sees an event it isn't allowed to.
+        resolve(["trackingConsent": created.trackingConsent])
     }
 
     // MARK: - Methods
@@ -251,6 +260,11 @@ final class KiroraSdkModule: RCTEventEmitter, @unchecked Sendable {
     }
 
     // MARK: - Internals
+
+    private func authenticationFailed(_ reason: AuthenticationFailureReason) {
+        guard locked({ listening }) else { return }
+        sendEvent(withName: Self.authenticationFailedEvent, body: ["reason": reason.rawValue])
+    }
 
     private func tapped(_ tap: KiroraPushTap) {
         guard locked({ listening }) else { return }
