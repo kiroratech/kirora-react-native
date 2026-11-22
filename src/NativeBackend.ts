@@ -90,9 +90,19 @@ class NativeQueue {
   /** Settles once the last queued call has been sent (not answered). */
   private tail: Promise<void> = Promise.resolve();
 
-  /** `send` now when nothing waits and there is no `ready`; otherwise after what waits, then `ready`. */
+  /**
+   * `send` now when nothing waits and there is no `ready`; otherwise after what waits, then `ready`.
+   * A `send` that throws (a native method missing from an older binary, an argument the bridge
+   * refuses) rejects the answer rather than throwing at the caller.
+   */
   run<T>(send: () => T | Promise<T>, ready?: Promise<unknown>): Promise<T> {
-    if (this.waiting === 0 && !ready) return Promise.resolve(send());
+    if (this.waiting === 0 && !ready) {
+      try {
+        return Promise.resolve(send());
+      } catch (e) {
+        return Promise.reject(e);
+      }
+    }
     this.waiting++;
     const previous = this.tail;
     let result!: Promise<T>;
@@ -157,11 +167,15 @@ export class NativeBackend implements KiroraBackend {
     if (fetchUserToken) {
       // An empty answer fails the request on the native side.
       this.subscriptions.push(emitter.addListener(TOKEN_REQUEST_EVENT, (event: NativeAsk) => {
+        const answer = (token: string | null, error: string | null) =>
+          this.now('Answering the token request', () => this.native.resolveToken(event.requestId, token, error));
         Promise.resolve()
           .then(fetchUserToken)
           .then(
-            (token) => this.native.resolveToken(event.requestId, token || null, null),
-            (e) => this.native.resolveToken(event.requestId, null, e instanceof Error ? e.message : String(e))
+            // Only a non-empty string crosses: the bridge refuses other types, and the native side
+            // fails the request on null.
+            (token) => answer(typeof token === 'string' && token !== '' ? token : null, null),
+            (e) => answer(null, e instanceof Error ? e.message : String(e))
           );
       }));
     }
@@ -256,11 +270,11 @@ export class NativeBackend implements KiroraBackend {
               if (expired()) {
                 this.error(`${name} answered after the native SDK stopped waiting (about 1.5 s): it acted on its own`);
               }
-              this.native.resolveAnswer(ask.requestId, answer);
+              this.now(`Answering ${name}`, () => this.native.resolveAnswer(ask.requestId, answer));
             },
             (e) => {
               this.error(`${name} threw`, e);
-              this.native.resolveAnswer(ask.requestId, fallback);
+              this.now(`Answering ${name}`, () => this.native.resolveAnswer(ask.requestId, fallback));
             }
           );
       })
@@ -287,6 +301,24 @@ export class NativeBackend implements KiroraBackend {
     }
   }
 
+  /**
+   * Sends a call that answers nothing (`track`, an answer to the native SDK) through the queue, after
+   * `ready` if given. What the native module throws is logged: it never reaches the app, as an
+   * exception or an unhandled rejection.
+   */
+  private fire(what: string, send: () => unknown, ready?: Promise<unknown>): void {
+    this.queue.run(send, ready).then(undefined, (e) => this.error(`${what} failed`, e));
+  }
+
+  /** A native call made at once, outside the queue, logged rather than thrown if the module throws. */
+  private now(what: string, send: () => void): void {
+    try {
+      send();
+    } catch (e) {
+      this.error(`${what} failed`, e);
+    }
+  }
+
   /** `call`, logging and answering `fallback` instead of rejecting. */
   private quietly<T>(what: string, send: () => Promise<T>, fallback: T): Promise<T> {
     return this.call(send, fallback).catch((e) => {
@@ -297,6 +329,10 @@ export class NativeBackend implements KiroraBackend {
 
   /** Rejects with what the native SDK threw: `UserTokenError`, `KiroraApiError` or `KiroraError`. */
   identify(token?: string): Promise<void> {
+    // Checked here: the bridge refuses another type (a crash on Android's old architecture).
+    if (token !== undefined && token !== null && typeof token !== 'string') {
+      return Promise.reject(new KiroraError('identify() takes a token string, or nothing to use fetchUserToken'));
+    }
     return this.call(() => this.native.identify(token || null), undefined);
   }
 
@@ -311,7 +347,7 @@ export class NativeBackend implements KiroraBackend {
     if (!event) return;
     if (!this.beforeSend) {
       // The native SDK applies consent itself; no app code sees the event here.
-      void this.queue.run(() => this.send(event));
+      this.fire(`Tracking ${name}`, () => this.send(event));
       return;
     }
     const consent = this.freshConsent ?? this.storedConsent;
@@ -321,7 +357,7 @@ export class NativeBackend implements KiroraBackend {
     // Calls made after it wait in the queue, so they keep their order. One from a client that is
     // destroyed meanwhile still goes: the native SDK keeps waiting events for the next client.
     const refusals = this.queue.refusals;
-    void this.queue.run(() => {
+    this.fire(`Tracking ${name}`, () => {
       const allowed = consent ?? this.storedConsent;
       if (this.setupError) this.error(`${name} not tracked: native setup failed`);
       else if (allowed === undefined) this.error(`${name} not tracked: unknown whether tracking is allowed`);
@@ -345,7 +381,7 @@ export class NativeBackend implements KiroraBackend {
       return;
     }
     if (!this.beforeSend) {
-      void this.queue.run(() => this.native.trackScreenView(name));
+      this.fire('Tracking a screen view', () => this.native.trackScreenView(name));
       return;
     }
     // Through beforeSend like any app event; the native SDK still names it `Screen Viewed`.
@@ -355,13 +391,21 @@ export class NativeBackend implements KiroraBackend {
   /** Never queued: a refusal takes effect at once, and blocks the events still waiting. */
   setTrackingConsent(granted: boolean): void {
     if (this.destroyed) return;
+    // Never guessed: iOS's old bridge reads a missing boolean as `false`, a silent refusal.
+    if (typeof granted !== 'boolean') {
+      this.error('setTrackingConsent() takes true or false: the choice is unchanged');
+      return;
+    }
     this.freshConsent = granted;
     if (!granted) this.queue.refusals++;
-    this.native.setTrackingConsent(granted);
+    this.now('setTrackingConsent', () => this.native.setTrackingConsent(granted));
   }
 
   /** Resolves once Kirora recorded the choice; rejects, as `identify` does, when it didn't. */
   setPushConsent(granted: boolean): Promise<void> {
+    if (typeof granted !== 'boolean') {
+      return Promise.reject(new KiroraError('setPushConsent() takes true or false: nothing was recorded'));
+    }
     return this.call(() => this.native.setPushConsent(granted), undefined);
   }
 
@@ -377,6 +421,10 @@ export class NativeBackend implements KiroraBackend {
 
   /** Never rejects. */
   setPushEnabled(enabled: boolean): Promise<void> {
+    if (typeof enabled !== 'boolean') {
+      this.error('setPushEnabled() takes true or false: push is unchanged');
+      return Promise.resolve();
+    }
     return this.quietly(`Turning push ${enabled ? 'on' : 'off'}`, () => this.native.setPushEnabled(enabled), undefined);
   }
 
@@ -405,7 +453,7 @@ export class NativeBackend implements KiroraBackend {
     this.destroyed = true;
     this.subscriptions.forEach((s) => s.remove());
     if (stopNative) {
-      void this.queue.run(() => {
+      this.fire('Stopping the native SDK', () => {
         this.native.setNotificationEvents(false, false);
         this.native.destroy();
       });
@@ -493,7 +541,7 @@ export class NativeBackend implements KiroraBackend {
       this.error('onNewPushToken needs the token');
       return;
     }
-    if (!this.destroyed) void this.queue.run(() => this.native.onNewPushToken(token));
+    if (!this.destroyed) this.fire('onNewPushToken', () => this.native.onNewPushToken(token));
   }
 
   onNotificationClicked(listener: (data: NotificationData) => void): () => void {
@@ -522,7 +570,7 @@ export class NativeBackend implements KiroraBackend {
     if (this.destroyed) return;
     const clicked = this.clickListeners.size > 0;
     const received = this.receivedListeners.size > 0;
-    void this.queue.run(() => this.native.setNotificationEvents(clicked, received));
+    this.fire('Turning notification events on or off', () => this.native.setNotificationEvents(clicked, received));
   }
 }
 

@@ -1,12 +1,36 @@
 # Kirora React Native SDK
 
-Track signed-in users' app activity and connect their devices to Kirora push notifications.
-The package exposes one TypeScript API backed by Kirora's native Android and iOS SDKs.
-Native code owns event storage, sessions, consent, retries and notification handling.
+Report what signed-in users do in your React Native app to Kirora, so segments, journeys,
+campaigns and conversion goals can act on it, and connect their devices to Kirora push
+notifications. The package exposes one TypeScript API backed by Kirora's native Android and
+iOS SDKs. Native code owns event storage, sessions, consent, retries and notification
+handling; this package forwards calls and runs your JavaScript callbacks.
 
-**Preview: 0.1.0.** Tested on an Android emulator against a fake Kirora API; iOS builds,
-physical devices and push delivery are unverified. Validate the exact native artifacts used by
-your host app. Successful JavaScript calls alone do not establish delivery.
+**Preview: 0.1.0.** Not yet published to npm. See [What has been verified](#what-has-been-verified)
+for what was tested and how. Validate the exact native artifacts your app resolves:
+successful JavaScript calls alone do not establish delivery.
+
+## Terms used here
+
+These follow Kirora's API guides and the shared client SDK interface.
+
+| Term | Meaning |
+| --- | --- |
+| **Contact** | One person in your Kirora workspace. Events, devices and consent belong to a contact. |
+| **User** | The person signed in to your app. Kirora matches them to the contact whose `externalId` equals the user token's `sub`. |
+| **Client key** | The workspace's public key (`kirora_pk_…`). Safe to ship in the app; it acts only together with a user token. |
+| **User token** | A short-lived token your server signs for one user. Never signed in the app. |
+| **Identify** | `identify()`: sign the user in to Kirora, so the device and events are tied to their contact. |
+| **Event** | Something the user did, with a name (`Order Completed`) and **properties** (`{ order_id: 'ORD-1042' }`). |
+| **Session** | A visit: it starts with `Session Started` and ends after 30 minutes with no activity. |
+| **Device** | This app on this phone. Its **device id** is a random value the SDK creates, never a hardware or advertising id. |
+| **Tracking consent** | The user's choice about behavioural tracking (events, screens, sessions), stored on the device. |
+| **Push consent** | The contact's consent to marketing push, saved by Kirora. Separate from tracking consent and from the OS notification permission. |
+| **Sign out** | `logout()`: forget the user on this device and detach the device from their contact. |
+
+There are no anonymous contacts in this version. Events tracked before the first
+`identify()` wait on the device and are sent as the next user to sign in; nothing is sent
+for a signed-out user.
 
 ## Requirements and installation
 
@@ -15,7 +39,8 @@ your host app. Successful JavaScript calls alone do not establish delivery.
 | React Native | Peer dependency `>=0.71.0`; the full version/architecture range has not been verified. The implementation uses legacy native-module APIs through React Native's interoperability layer. |
 | Android | Runs on API 24+. Compile with `compileSdkVersion` 35 or later: the native SDK's AndroidX dependencies need it. |
 | iOS | Podspec declares iOS 13+ and Swift 5.9. Use the higher deployment minimum required by your React Native/Xcode combination. |
-| Expo | A native development build is required. Expo Go cannot load this package's native modules. No Expo config plugin is included. |
+| Expo | A native development build is required. Expo Go cannot load this package's native modules. The Expo config plugin is a separate package, `@kirora/expo-plugin`. |
+| Web | Not supported. On react-native-web or Expo web, `isAvailable` is false and every call is a no-op; use Kirora's web SDK, `@kirora/web`, there. |
 | Native releases | Android defaults to Kirora `0.1.0`; iOS depends on `Kirora ~> 0.1`. Verify the resolved artifacts contain the fixes needed by your app. |
 
 Public npm/native repository installation has not been verified for this preview. Once
@@ -92,11 +117,12 @@ export const kirora = new Kirora({
 });
 ```
 
-The client key is public. **Keep the token secret and all server API keys on your
-server.** The SDK calls your server for a user token; it does not sign one in the app.
-The server issues an HS256 JWT with `sub` equal to your stable user ID/contact
-`externalId`, and `iat`/`exp` in seconds. The token must be valid for no more than
-24 hours and not issued more than 60 seconds ahead of server time.
+The client key is public. **Keep the token secret (the key user tokens are signed with)
+and every server API key on your server.** The SDK calls your server for a user token; it
+never signs one in the app. Your server signs an HS256 JWT whose `sub` is the contact's
+`externalId` (your own stable id for the user), with `iat` and `exp` in seconds. A token
+may be valid for at most 24 hours and may not be issued more than 60 seconds ahead of
+Kirora's clock.
 
 `requireTrackingConsent: true` waits for an explicit tracking grant. Otherwise tracking
 is allowed by default unless a refusal is remembered.
@@ -125,8 +151,11 @@ try {
 ```
 
 A token-provider request has a native 30-second round-trip limit. Requests carry IDs;
-native code decides whether an answer is still current. Android's current native SDK
-also supports proactive token refresh; it is not a separate React Native option.
+native code decides whether an answer is still current. The native SDKs call
+`fetchUserToken` 60 seconds before the current token's `exp`, when the app returns to the
+foreground with an expired token, and after Kirora refuses one; there is no separate
+React Native option for this. Answering no token (`null`, `undefined` or an empty string)
+counts as a failed fetch: `identify()` rejects with `UserTokenError`.
 
 When the token fails outside a method call (a background send), `onAuthenticationFailed`
 says why: `fetch_failed` when `fetchUserToken` threw, gave no token or didn't answer in
@@ -145,11 +174,11 @@ const kirora = new Kirora({
 });
 ```
 
-Events captured before sign-in remain on the device and are adopted by the next
-identified user; they are not sent anonymously. Native SDKs own association of captured
-events with identities. A direct user switch must preserve the old user's event
-ownership rather than send those events as the new user. Validate that behavior with
-the exact native versions you release.
+Events tracked before sign-in stay on the device and go to the next user who signs in;
+they are never sent anonymously. The native SDKs tie each event to its user when it is
+tracked: if another user signs in without `logout()`, the earlier user's waiting events
+still go as that user, never as the new one. Validate this with the exact native versions
+you release.
 
 On application sign-out:
 
@@ -172,14 +201,33 @@ events. It is intended for disposal, not application sign-out.
 ```ts
 kirora.track('Order Completed', {
   order_id: 'ORD-1042',
-  amount: 12500,
+  total: 12500,
   currency: 'NGN',
+  products: [{ product_id: 'p1', name: 'Yirgacheffe Beans', price: 6250, quantity: 2 }],
 });
 kirora.trackScreenView('Checkout');
 ```
 
-Use clear, consistent event names and property names. The server applies event-name and
-property limits. Properties are copied in JavaScript before crossing the bridge.
+`Order Completed` and its properties are one of Kirora's standard e-commerce events; see
+Kirora's e-commerce events guide for the rest (`Product Viewed`, `Checkout Started`…).
+
+### Naming events and properties
+
+Kirora reads events by exact name, so a journey waiting for `Order Completed` never starts
+for `order completed`.
+
+- **Event names:** Title Case, object then past-tense action: `Plan Upgraded`,
+  `Order Completed`. One fixed name per action: anything that varies (an id, a price)
+  goes in properties. Up to 128 characters; at most 1,000 distinct names per workspace.
+- **Property names:** lowercase snake_case (`order_id`, `plan_name`), up to 64 characters,
+  with the whole properties object at most 16 KB as JSON. Send the same type every time,
+  and amounts in major units (naira, not kobo).
+- **Reserved:** names beginning with `contact.` are Kirora's own and are refused.
+  `Screen Viewed`, `Session Started` and the `Application …` lifecycle events have fixed
+  meanings: send them through `trackScreenView`, `trackSessions` and
+  `trackAppLifecycle` rather than with `track`.
+
+The server enforces these limits; the SDK doesn't check them before sending. Properties are copied in JavaScript before crossing the bridge.
 Use JSON-compatible objects, arrays, strings, finite numbers, booleans and null. Object
 members with `undefined` are omitted and dates become ISO strings. Cycles, functions,
 `Map`, non-finite numbers and unsupported objects drop that event with a diagnostic.
@@ -204,6 +252,27 @@ await kirora.flush();
 Flush attempts delivery without intentionally bypassing consent or server Retry-After.
 It is not a delivery receipt. Verify your resolved native artifacts against the backend
 before release. Neither a successful call nor a schema check establishes live delivery.
+
+### Use the events in Kirora
+
+Events land on the signed-in user's contact. You build on them in the Kirora dashboard or
+through the server API, not in this SDK. With `Checkout Started` and `Order Completed`
+tracked as above:
+
+- **Segment:** "contacts with `Order Completed` at least twice in the last 90 days". A
+  segment is evaluated when used, so it changes as new events arrive. Rules can read a
+  nested property with a dotted path, such as `products.0.price`.
+- **Journey:** triggered by `Checkout Started`, waits, then sends a push reminder, with an
+  exit condition on `Order Completed` so a user who orders meanwhile gets no reminder.
+- **Campaign:** one push send to a segment, now or at a set time. Marketing push reaches
+  only contacts with push consent and a device that allows notifications.
+- **Conversion goal:** counts `Order Completed` after a campaign or journey message, and
+  sums `total` as revenue. Conversion goals need a paid plan.
+- **Transactional push:** sent from your server to one contact by `externalId`, such as an
+  order update. It needs no push consent, only a device that allows notifications.
+
+Push campaigns and journeys reach this device only after `identify()` has registered it
+(see [Set up push](#set-up-push)).
 
 ### Redact app properties before native storage
 
@@ -244,7 +313,7 @@ the hook runs. Do not give it unrelated collection/network side effects.
 | `setTrackingConsent(granted)` | Behavioural collection: app events, screens, sessions, lifecycle events and influenced app-open times. Stored locally by native code. |
 | `setPushConsent(granted)` | Signed-in user's marketing push choice, saved by the server. |
 | `requestPushPermission()` | Android/iOS notification authorization. Does not grant marketing consent. |
-| `setPushEnabled(enabled)` | This installation's push setting, retained across user sign-out. Does not prompt. |
+| `setPushEnabled(enabled)` | This device's push setting, retained across sign-out. Does not prompt. |
 
 Apply tracking consent after your user chooses:
 
@@ -274,7 +343,7 @@ if (kirora.isAvailable) {
 Marketing push needs both marketing consent and system authorization. Transactional push
 does not require marketing consent. Operational registration, delivery/tap reports and
 device detachment are separate from behavioural tracking and may continue while tracking
-is refused. `setPushEnabled(false)` detaches the installation; `true` registers again
+is refused. `setPushEnabled(false)` detaches the device; `true` registers again
 when system permission permits. A granted permission request also turns device push on.
 
 ## Set up push
@@ -328,7 +397,9 @@ delegates and other messaging libraries need validation in your host.
 
 Delivered reporting and rich notifications require a Notification Service Extension.
 Add `KiroraNotificationService` to that extension target and subclass its service as the
-[native iOS guide](../kirora-ios/README.md) describes. The wrapper's main-app pod does
+[native iOS guide](https://github.com/kiroratech/kirora-ios#readme) describes. The
+extension must hand back the push's own content (or its mutable copy), never a new empty
+one, and call the content handler exactly once on every path. The wrapper's main-app pod does
 not create an extension target for you. If your configured push target uses Firebase,
 include/configure the required Firebase iOS integration as well; `push: true` alone does
 not install Firebase in an iOS host.
@@ -385,8 +456,11 @@ for up to ten seconds, then falls back. Subsequent JS routing answers have a 1.5
 limit: a request that reaches JavaScript after it (a busy JS thread) isn't passed to
 `handleDeepLink`, since native code has opened the link by then. Test cold starts with
 your router.
-On iOS, claim your universal links in `handleDeepLink` when needed, particularly in
-scene-based hosts; do not assume every unhandled web URL stays in the app.
+On iOS, claim your own universal links in `handleDeepLink`. An `https` link it doesn't claim
+opens in Safari, or in the installed app that owns it, even when the link is yours: React
+Native's linking module accepts every web URL, so the native SDK doesn't ask the app delegate
+about it unless the host is listed in Info.plist `KiroraUniversalLinkHosts`. This needs the
+Kirora iOS SDK at `87bcf5b` or later; earlier versions could swallow the link.
 
 ## Read state and handle failures
 
@@ -411,19 +485,51 @@ Keep your own application UI honest about these distinctions.
 ## Storage and privacy
 
 This package adds no JS persistence or delivery queue. The native SDKs store event
-properties, ownership/context, consent, sessions, installation and registration state in
-the app's storage. JWTs are kept in native memory. Your application and authentication
-libraries may have their own storage policies.
+properties, ownership/context, consent, sessions, device and registration state in
+the app's storage. User tokens are kept in native memory only. Your application and
+authentication libraries may have their own storage policies.
 
-The installation ID is random, not an advertising/hardware ID. Core event context follows
-the shared contract: installation ID, session, locale/timezone and library, plus approved
-mobile app, OS, screen and device manufacturer/model/type fields as native releases adopt
-them. Network details are not part of the current contract. Older preview artifacts have
-different collection behavior. Verify the actual native artifact before
-making collection disclosures. Push registration
-includes app/OS versions, locale/timezone and the platform token. Influenced app-open
-times are behavioural and follow tracking consent; push delivery and tap reports are
-operational. The wrapper hook cannot redact those native reports.
+Each event carries a `context` beside its properties: the device id, the session, the
+locale and time zone, the app's name, version, build and bundle id or package name, the
+OS name and version, the screen's size and density, and the device's manufacturer and
+type (`ios` or `android`). The device model and network details are not collected. Kirora
+also records the IP address and user agent each request comes from, and the library that
+sent it. Older
+preview artifacts collected differently: verify the native artifact you ship before
+making collection disclosures. `beforeSend` cannot redact native context or the push
+reports below.
+
+To report how push notifications perform, the SDK sends:
+- the app's version, the OS version, and the device's language and time zone, when it
+  registers the device;
+- the time the app is opened or returns to the foreground;
+- when a Kirora notification is shown or tapped.
+
+Behavioural tracking consent also controls app-open times for influenced opens.
+Push registration details, delivery receipts and notification taps are operational
+push reports and are separate from behavioural tracking consent and marketing push
+consent. Disabling behavioural tracking does not disable those operational reports.
+
+It never sends hardware or advertising identifiers. The device id is a random value the
+SDK creates and keeps in the app's own storage; it is deleted with the app.
+
+## Differences from Kirora's other SDKs
+
+The options, event names and behaviour match the native SDKs this package wraps. Where
+the React Native API differs:
+
+| Here | Elsewhere | Why |
+| --- | --- | --- |
+| `onNotificationClicked(listener)` answers a function that removes the listener | `addNotificationClickListener` / `removeNotificationClickListener` (web, Android, iOS) | Wrapper naming; see the open item below |
+| `onNotificationReceived` | Android SDK's foreground notification listener | Android only: iOS has no equivalent event |
+| `isAvailable` (property) | Not on native or web SDKs | False where the native module isn't linked |
+| `beforeSend` sees `track` and `trackScreenView` events only, with empty `context` | Native and web SDKs also pass `Session Started` and lifecycle events, with context | It runs in JavaScript before the event crosses to native code; automatic native events carry no app values |
+| `getState()` answers a promise | Synchronous on iOS, `suspend` on Android | Read across the bridge |
+| `trackScreenView(name)` | `trackPageView()` on web | Platform |
+
+Open item: the shared interface lists `addNotificationClickListener` for every SDK and
+`onNotificationClicked` for wrappers. Until that is settled, this package keeps
+`onNotificationClicked`.
 
 ## Jest mock and source development
 
@@ -457,9 +563,20 @@ Build before packing so `lib/` contains JS and declarations. `npm test` runs the
 Still build your consuming Android/iOS app to validate autolinking, dependency resolution,
 architecture support and push setup.
 
-Verified so far: TypeScript build/typecheck and tests, the Android bridge unit tests, Android
-builds of both apps, and the e2e scenarios on an Android emulator. iOS builds, physical
-devices, push delivery and production publication remain unverified.
+## What has been verified
+
+- **On every change (CI):** TypeScript typecheck, build and Jest tests; the Android bridge
+  unit tests; Android and iOS-simulator builds of `e2e-app/`.
+- **Android emulator:** the `e2e-app/` scenarios against a fake Kirora API.
+- **Physical devices (21 Nov 2026):** an iPhone and an Android phone running Kirora's Expo
+  example app (a pre-release build of this package, React Native 0.88.1) against Kirora's
+  staging environment: `identify()` with a user token, events reaching the contact, push
+  registration, a campaign push with an image shown on a locked iPhone and on Android,
+  a tap opening an app link, and the dashboard counting the delivery, open and click.
+
+Not verified: installing from npm and CocoaPods (nothing is published yet), the full React
+Native version and architecture range, offline delivery and app termination on a device,
+and `https` push links on a device with the iOS SDK's `87bcf5b` fix.
 
 ## License
 

@@ -213,7 +213,11 @@ class KiroraSdkModule(
         }
     }
 
-    /** Starts or stops the `KiroraNotificationClicked` / `KiroraNotificationReceived` events. */
+    /**
+     * Starts or stops the `KiroraNotificationClicked` / `KiroraNotificationReceived` events.
+     * Synchronized: JavaScript's calls and a reload's [invalidate] may run on different threads.
+     */
+    @Synchronized
     @ReactMethod
     fun setNotificationEvents(clicked: Boolean, received: Boolean) {
         val kirora = kirora ?: return

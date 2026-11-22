@@ -719,3 +719,120 @@ test('onAuthenticationFailed hears why the token failed in the background; a thr
   expect(() => fail({ reason: 'refused' })).not.toThrow();
   expect(reasons).toEqual(['fetch_failed', 'refused']);
 });
+
+describe('the bridge boundary', () => {
+  /** Rejections nobody handled while `body` ran: none may reach the app. */
+  const unhandledDuring = async (body: () => Promise<void>) => {
+    const seen: unknown[] = [];
+    const listener = (reason: unknown) => seen.push(reason);
+    process.on('unhandledRejection', listener);
+    try {
+      await body();
+      await tick(20);
+    } finally {
+      process.off('unhandledRejection', listener);
+    }
+    return seen;
+  };
+
+  test('a native method that throws (an older binary) never throws at the app or leaves a rejection', async () => {
+    const logged = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const k = make();
+    const broken = () => {
+      throw new TypeError('native.track is not a function');
+    };
+    native.track = broken;
+    native.trackScreenView = broken;
+    native.onNewPushToken = broken;
+    native.setNotificationEvents = broken;
+    native.setTrackingConsent = broken;
+    native.destroy = broken;
+    native.flush = broken as never;
+    native.identify = broken as never;
+    const unhandled = await unhandledDuring(async () => {
+      expect(() => k.track('Order Completed', { total: 1 })).not.toThrow();
+      expect(() => k.trackScreenView('Home')).not.toThrow();
+      expect(() => k.onNewPushToken('fcm')).not.toThrow();
+      expect(() => k.setTrackingConsent(true)).not.toThrow();
+      expect(() => k.onNotificationClicked(() => undefined)).not.toThrow();
+      await expect(k.flush()).resolves.toBeUndefined();
+      // Mapped to the SDK's own error, as any native failure is.
+      await expect(k.identify('t')).rejects.toBeInstanceOf(KiroraError);
+      expect(() => k.destroy()).not.toThrow();
+    });
+    expect(unhandled).toEqual([]);
+    expect(logged.mock.calls.map((c) => c[0])).toEqual(
+      expect.arrayContaining(['[Kirora] Tracking Order Completed failed', '[Kirora] setTrackingConsent failed'])
+    );
+  });
+
+  test('an event held for beforeSend whose native call throws is logged, not left as a rejection', async () => {
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    native.trackingConsent = undefined;
+    const { k } = makeSeeing();
+    native.track = () => {
+      throw new Error('bridge refused');
+    };
+    const unhandled = await unhandledDuring(async () => {
+      k.setTrackingConsent(true);
+      k.track('Held');
+    });
+    expect(unhandled).toEqual([]);
+  });
+
+  test('a consent that is not a boolean changes nothing (iOS would read it as a refusal)', async () => {
+    const logged = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const k = make();
+    k.setTrackingConsent(undefined as unknown as boolean);
+    k.setTrackingConsent('yes' as unknown as boolean);
+    await expect(k.setPushConsent(1 as unknown as boolean)).rejects.toBeInstanceOf(KiroraError);
+    await expect(k.setPushEnabled(null as unknown as boolean)).resolves.toBeUndefined();
+    await tick();
+    expect(native.calls.filter((c) => ['setTrackingConsent', 'setPushConsent', 'setPushEnabled'].includes(c[0]))).toEqual([]);
+    expect(logged).toHaveBeenCalledWith('[Kirora] setTrackingConsent() takes true or false: the choice is unchanged', '');
+    // A refusal that never happened doesn't hold back events either.
+    k.track('After');
+    await tick();
+    expect(tracked()).toEqual(['After']);
+  });
+
+  test('identify() with a token that is not a string rejects without reaching the bridge', async () => {
+    const k = make();
+    await expect(k.identify(42 as unknown as string)).rejects.toThrow('identify() takes a token string');
+    await expect(k.identify(null as unknown as string)).resolves.toBeUndefined();
+    expect(native.calls.filter((c) => c[0] === 'identify')).toEqual([['identify', null]]);
+  });
+
+  test('fetchUserToken answering something other than a string fails the request, never crossing as that type', async () => {
+    make({ fetchUserToken: async () => 12345 as unknown as string });
+    native.listeners.get('KiroraTokenRequest')!({ requestId: 'r1' });
+    await tick();
+    expect(native.calls).toContainEqual(['resolveToken', 'r1', null, null]);
+  });
+
+  test('a token answer the bridge refuses is logged, not left as a rejection', async () => {
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    make({ fetchUserToken: async () => 'tok' });
+    native.resolveToken = () => {
+      throw new Error('module went away');
+    };
+    const unhandled = await unhandledDuring(async () => {
+      native.listeners.get('KiroraTokenRequest')!({ requestId: 'r2' });
+    });
+    expect(unhandled).toEqual([]);
+  });
+
+  test('on the web it says to use the web SDK, not a development build', () => {
+    const logged = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    jest.resetModules();
+    let Fresh!: typeof Kirora;
+    jest.isolateModules(() => {
+      jest.doMock('react-native', () => ({ Platform: { OS: 'web' }, NativeModules: {} }), { virtual: true });
+      Fresh = require('../Kirora').Kirora;
+    });
+    expect(new Fresh({ clientKey: 'kirora_pk_w' }).isAvailable).toBe(false);
+    expect(logged).toHaveBeenCalledTimes(1);
+    expect(logged.mock.calls[0][0]).toContain('@kirora/web');
+    expect(logged.mock.calls[0][0]).not.toContain('Expo Go');
+  });
+});

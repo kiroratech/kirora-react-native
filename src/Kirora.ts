@@ -1,7 +1,7 @@
 import type { KiroraBackend, KiroraState } from './backend';
 import { NativeBackend, NativeEventEmitterLike, NativeKiroraModule } from './NativeBackend';
 import type { KiroraOptions, NotificationData, PushPermission, PushStatus } from './types';
-import { UnavailableBackend } from './UnavailableBackend';
+import { type Unavailable, UnavailableBackend } from './UnavailableBackend';
 
 /** The native module to use instead of the runtime's, for tests. @internal */
 export interface KiroraInternals {
@@ -41,11 +41,12 @@ export class Kirora {
 
   constructor(options: KiroraOptions, internals: KiroraInternals = {}) {
     const previous = Kirora.active;
-    const native = internals.native !== undefined ? internals.native : nativeFromRuntime();
+    const found = internals.native !== undefined ? internals.native ?? 'unlinked' : nativeFromRuntime();
+    const native = typeof found === 'object' ? found : undefined;
     if (native) {
       this.backend = new NativeBackend({ ...options, clientKey: (options.clientKey ?? '').trim() }, native.module, native.emitter);
     } else {
-      this.backend = new UnavailableBackend(options.logLevel !== 'none');
+      this.backend = new UnavailableBackend(options.logLevel !== 'none', found as Unavailable);
     }
     this.isAvailable = !!native;
     Kirora.active = this;
@@ -87,6 +88,7 @@ export class Kirora {
    * The user's tracking choice, remembered on the device. `false` stops behavioural collection
    * (even without `requireTrackingConsent`) and forgets events, visit state and app opens still
    * waiting. Operational push (registration, delivery and tap reports, cleanup) is unaffected.
+   * Anything but `true` or `false` is logged and ignored: the choice stays as it was.
    */
   setTrackingConsent(granted: boolean): void {
     this.backend.setTrackingConsent(granted);
@@ -173,15 +175,18 @@ export class Kirora {
   }
 }
 
-/** The native module and its emitter, on Android or iOS when the module is linked (not in Expo Go). */
-function nativeFromRuntime(): NativeBridge | undefined {
+/**
+ * The native module and its emitter, on Android or iOS when the module is linked; otherwise why
+ * not: not linked (Expo Go), or another platform (web).
+ */
+function nativeFromRuntime(): NativeBridge | Unavailable {
   try {
     const rn = require('react-native');
-    if (rn.Platform.OS !== 'android' && rn.Platform.OS !== 'ios') return undefined;
+    if (rn.Platform.OS !== 'android' && rn.Platform.OS !== 'ios') return 'unsupported-platform';
     const module = rn.NativeModules?.KiroraSdk as NativeKiroraModule | undefined;
-    if (!module) return undefined;
+    if (!module) return 'unlinked';
     return { module, emitter: new rn.NativeEventEmitter(module) };
   } catch {
-    return undefined;
+    return 'unlinked';
   }
 }
