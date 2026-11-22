@@ -520,16 +520,12 @@ the React Native API differs:
 
 | Here | Elsewhere | Why |
 | --- | --- | --- |
-| `onNotificationClicked(listener)` answers a function that removes the listener | `addNotificationClickListener` / `removeNotificationClickListener` (web, Android, iOS) | Wrapper naming; see the open item below |
+| `onNotificationClicked(listener)` answers a function that removes the listener | `addNotificationClickListener` / `removeNotificationClickListener` (web, Android, iOS) | The shared interface's wrapper form (Flutter's is a stream). Taps before the first listener, the latest ten, still reach it |
 | `onNotificationReceived` | Android SDK's foreground notification listener | Android only: iOS has no equivalent event |
 | `isAvailable` (property) | Not on native or web SDKs | False where the native module isn't linked |
 | `beforeSend` sees `track` and `trackScreenView` events only, with empty `context` | Native and web SDKs also pass `Session Started` and lifecycle events, with context | It runs in JavaScript before the event crosses to native code; automatic native events carry no app values |
 | `getState()` answers a promise | Synchronous on iOS, `suspend` on Android | Read across the bridge |
 | `trackScreenView(name)` | `trackPageView()` on web | Platform |
-
-Open item: the shared interface lists `addNotificationClickListener` for every SDK and
-`onNotificationClicked` for wrappers. Until that is settled, this package keeps
-`onNotificationClicked`.
 
 ## Jest mock and source development
 
