@@ -81,6 +81,23 @@ jobs:
       - name: Install the e2e app
         working-directory: e2e-app
         run: npm ci
+      # Robolectric downloads the Android runtime the bridge tests use (@Config(sdk = [34])) on
+      # first use, and fails the tests if that download breaks. Keep it between runs, and fetch it
+      # with retries when it isn't there. Update the name if the Robolectric version or SDK changes.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-4.17-sdk-34
+      - name: Fetch Robolectric's Android 14 runtime
+        run: |
+          name=android-all-instrumented-14-robolectric-10818077-i7
+          dir=~/.m2/repository/org/robolectric/android-all-instrumented/14-robolectric-10818077-i7
+          url=https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented/14-robolectric-10818077-i7
+          mkdir -p "$dir"
+          for file in "$name.pom" "$name.pom.sha512" "$name.jar" "$name.jar.sha512"; do
+            [ -s "$dir/$file" ] || curl -fsSL --retry 5 --retry-all-errors -o "$dir/$file" "$url/$file"
+          done
+          echo "$(cat "$dir/$name.jar.sha512")  $dir/$name.jar" | sha512sum -c -
       - name: Build the e2e app (compiles the module) and run the bridge unit tests
         working-directory: e2e-app/android
         # One ABI is enough to prove the module compiles.

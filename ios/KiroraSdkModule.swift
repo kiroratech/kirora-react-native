@@ -290,7 +290,11 @@ final class KiroraSdkModule: RCTEventEmitter, @unchecked Sendable {
             return true
         }
         guard changed else { return }
-        KiroraWrapper.setTapListener(clicked ? { [weak self] tap in self?.tapped(tap) } : nil)
+        var listener: (@Sendable (KiroraPushTap) -> Void)?
+        if clicked {
+            listener = { [weak self] tap in self?.tapped(tap) }
+        }
+        KiroraWrapper.setTapListener(listener)
     }
 
     // MARK: - Internals
