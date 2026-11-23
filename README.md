@@ -7,9 +7,8 @@ Send what signed-in users do in your React Native app to Kirora, and register th
 for Kirora push. One TypeScript API over Kirora's native Android and iOS SDKs, which store
 events and handle sessions, consent, retries and notifications.
 
-**Preview: 0.1.0.** Not yet published to npm. A successful JavaScript call does not prove
-delivery: test the native artifacts your app resolves ([CHANGELOG](CHANGELOG.md) lists what has
-been verified).
+**0.1.0**, the first release. A successful JavaScript call does not prove delivery: test the
+native artifacts your app resolves ([CHANGELOG](CHANGELOG.md) lists what has been verified).
 
 ## Requirements
 
@@ -22,8 +21,6 @@ been verified).
 | Web | Not supported: `isAvailable` is false and every call does nothing. Use `@kirora/web`. | |
 
 ## Install
-
-Once the package is in your registry:
 
 ```sh
 npm install @kirora/react-native
