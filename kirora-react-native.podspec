@@ -17,7 +17,8 @@ Pod::Spec.new do |s|
 
   s.platforms      = { :ios => '13.0' }
   s.swift_version  = '5.9'
-  # The bridge, and the SDK it calls. Not the extension's sources, which are a separate pod.
+  # The bridge, and the SDK it calls (settings as in ios/vendor/kirora-ios/Kirora.podspec). Not the
+  # extension's sources, which are a separate pod.
   s.source_files   = 'ios/*.{h,m,swift}', 'ios/vendor/kirora-ios/Sources/Kirora/**/*.swift'
   s.resource_bundles = { 'Kirora_Privacy' => ['ios/vendor/kirora-ios/Sources/Kirora/PrivacyInfo.xcprivacy'] }
   s.frameworks     = 'Foundation', 'UIKit', 'UserNotifications'

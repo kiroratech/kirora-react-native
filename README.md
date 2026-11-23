@@ -174,7 +174,8 @@ beforeSend: (event) => {
 Copy and delete; don't destructure (`const { email, ...rest } = …`). React Native's Babel
 turns a `__proto__` property into the copy's prototype, and a non-plain object drops the event.
 
-`beforeSend` runs synchronously on `track` and `trackScreenView` events. Return the event,
+`beforeSend` sees `track` and `trackScreenView` events and must return synchronously (the first
+events wait until native tracking consent is known). Return the event,
 or `null` to drop it; a promise or an error also drops it. `context` is empty: native code
 adds it later, and automatic events skip the hook. Keep it free of side effects.
 
@@ -203,8 +204,8 @@ try {
 ```
 
 Marketing push needs push consent, OS permission and a registered device (see
-[Set up push](#set-up-push)); transactional push needs only the
-permission. Push registration and reports continue while tracking is refused.
+[Set up push](#set-up-push)); transactional push needs the permission and a registered
+device, not push consent. Push registration and reports continue while tracking is refused.
 `setPushEnabled(false)` detaches the device; `true`, or a granted permission request,
 registers it again.
 
@@ -219,7 +220,9 @@ push: true
 
 ### Android / FCM
 
-Add your app's `android/app/google-services.json` and configure the FCM push app in Kirora.
+Add your app's `android/app/google-services.json`, apply the Google Services Gradle plugin
+(`com.google.gms.google-services`) as Firebase's Android setup describes, and configure the FCM
+push app in Kirora. On Expo, `android.googleServicesFile` does both.
 The SDK's messaging service shows Kirora's messages (`kirora = "true"`) and ignores others.
 If your app has its own `FirebaseMessagingService`, forward to Kirora as the native Android
 SDK describes. `kirora.onNewPushToken(token)` forwards a token from a JS messaging library, and
@@ -245,12 +248,13 @@ Enable Push Notifications and configure the matching Kirora push app. With
 `import kirora_react_native` in place of `import Kirora`. A Firebase push app needs Firebase's
 iOS integration, which `push: true` doesn't install.
 
-Delivery reports and images need a Notification Service Extension with
-`KiroraNotificationService`, set up as the native iOS guide describes (the Expo plugin adds
-it). Take the pod from this package, in the extension's Podfile target:
+Delivery reports, images and buttons need a Notification Service Extension with
+`KiroraNotificationService`, and pushes sent with `mutable-content: 1`. Set it up as the
+native iOS guide describes (the Expo plugin adds it), taking the pod from this package in the
+extension's Podfile target:
 
 ```ruby
-pod 'KiroraNotificationService', :path => '../node_modules/@kirora/react-native/ios/vendor/kirora-ios'
+pod 'KiroraNotificationService', :path => File.join(File.dirname(`node --print "require.resolve('@kirora/react-native/package.json')"`), 'ios', 'vendor', 'kirora-ios')
 ```
 
 It can't read the client's options: with a custom `apiUrl`, set the same value as

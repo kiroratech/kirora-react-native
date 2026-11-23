@@ -28,7 +28,8 @@ All the SDK code is in [`App.tsx`](App.tsx).
    npm install
    ```
 
-4. Make the Kirora Android SDK available to Gradle. It is resolved from `mavenLocal()` until it is published:
+4. The Kirora Android SDK comes from Maven Central. To try a kirora-android checkout instead,
+   publish it to Maven Local, which this build prefers:
 
    ```sh
    cd ../../kirora-android

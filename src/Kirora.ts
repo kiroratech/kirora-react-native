@@ -28,8 +28,7 @@ declare const require: (id: string) => any;
  *
  * Every call goes to the native Kirora Android or iOS SDK. Where the native module isn't linked
  * (Expo Go), and on other platforms (web, macOS, Windows), every call does nothing and one error
- * says why. Create it once, at startup; a newer
- * client destroys the older one. No call blocks the app or throws because Kirora is unreachable.
+ * says why. Create it once, at startup; a newer client destroys the older one. No call blocks the app or throws because Kirora is unreachable.
  */
 export class Kirora {
   /** The most recently created instance. */
@@ -46,12 +45,12 @@ export class Kirora {
   constructor(options: KiroraOptions, internals: KiroraInternals = {}) {
     const previous = Kirora.active;
     const found = internals.native === undefined ? nativeFromRuntime() : internals.native ?? 'unlinked';
+    this.isAvailable = typeof found === 'object';
     if (typeof found === 'object') {
       this.backend = new NativeBackend({ ...options, clientKey: (options.clientKey ?? '').trim() }, found.module, found.emitter);
     } else {
       this.backend = new UnavailableBackend(options.logLevel !== 'none', found);
     }
-    this.isAvailable = typeof found === 'object';
     Kirora.active = this;
     // After this one's set-up, which replaced the native client: no longer current, the old one
     // only stops its own listeners.

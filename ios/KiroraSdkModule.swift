@@ -58,9 +58,9 @@ final class KiroraSdkModule: RCTEventEmitter, @unchecked Sendable {
             // Not "set up with no handler": the next JavaScript context may set one, so taps are
             // held and a tap's link waits for it again (10 s at most) instead of opening at once.
             KiroraWrapper.wrapperDetached()
+            clicksOn = false
         }
         takeKirora()?.destroy()
-        locked { clicksOn = false }
         locked { () -> [(answer: CheckedContinuation<Bool, Never>, fallback: Bool)] in
             defer { pending = [:] }
             return Array(pending.values)
@@ -280,16 +280,17 @@ final class KiroraSdkModule: RCTEventEmitter, @unchecked Sendable {
     /// shows in the foreground is asked about through `onForegroundNotification` instead.
     @objc(setNotificationEvents:received:)
     func setNotificationEvents(_ clicked: Bool, received: Bool) {
+        // Process-wide, like the handlers: after invalidate the listener is the next context's
+        // (or none, so taps are held), and a call still in flight must not take it back.
+        // Turned on only with a client, as on Android. Set outside the lock: attaching delivers
+        // held taps at once, on this thread, to `tapped`, which takes the lock.
         let changed = locked { () -> Bool in
-            defer { clicksOn = clicked }
-            return clicksOn != clicked
+            guard !invalidated, clicksOn != clicked, !clicked || kirora != nil else { return false }
+            clicksOn = clicked
+            return true
         }
         guard changed else { return }
-        var listener: (@Sendable (KiroraPushTap) -> Void)?
-        if clicked {
-            listener = { [weak self] tap in self?.tapped(tap) }
-        }
-        KiroraWrapper.setTapListener(listener)
+        KiroraWrapper.setTapListener(clicked ? { [weak self] tap in self?.tapped(tap) } : nil)
     }
 
     // MARK: - Internals
