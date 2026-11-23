@@ -51,6 +51,7 @@ jobs:
         run: scripts/check-bundled-ios.sh
       # Pack once, then publish that exact file.
       - if: steps.plan.outputs.publish == 'true'
-        run: npm pack --pack-destination release
+        # npm, unlike pnpm, doesn't create the destination folder.
+        run: mkdir -p release && npm pack --pack-destination release
       - if: steps.plan.outputs.publish == 'true'
         run: npm publish ./release/*.tgz --tag ${{ steps.plan.outputs.dist-tag }}
