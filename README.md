@@ -27,10 +27,10 @@ device and go to the next user who signs in. Nothing is sent while nobody is sig
 | --- | --- |
 | React Native | Peer dependency `>=0.71.0`; tested with 0.88.1 only. Uses legacy native-module APIs through the interop layer. |
 | Android | API 24+. `compileSdkVersion` 35 or later. Tested with JDK 17, Kotlin 2.2.0, Gradle 9.4.1 and `compileSdkVersion` 37. |
-| iOS | iOS 13+, Swift 5.9. Needs the Kirora iOS SDK at `c91c309` or later. |
+| iOS | iOS 13+, Swift 5.9. Needs the Kirora iOS SDK 0.1.0 or later. |
 | Expo | A development build. Expo Go can't load native modules. |
 | Web | Not supported: `isAvailable` is false and every call does nothing. Use `@kirora/web`. |
-| Native releases | Android defaults to Kirora `0.1.0`; iOS depends on `Kirora ~> 0.1`. [Sign-out](#sign-out)'s saved detach and Android's channel-off `denied` need releases after `0.1.0`. |
+| Native releases | Android defaults to Kirora `0.1.0`; iOS depends on `Kirora ~> 0.1`. |
 
 Once the package is in your registry:
 
@@ -50,20 +50,11 @@ Without the native module, `kirora.isAvailable` is false and every method does n
 
 ### Local native dependencies during development
 
-The native SDKs are not published yet. Android always links `com.kirora:android-sdk` and
-`com.kirora:android-sdk-push` (which adds Firebase Messaging). Publish both from a Kirora
-Android checkout and let the app read Maven Local:
+Android links `io.kirora:android-sdk` and `io.kirora:android-sdk-push` (which adds Firebase
+Messaging) from Maven Central. `ext.kiroraAndroidSdkVersion` in the root project overrides the
+version.
 
-```sh
-./gradlew :kirora-sdk:publishToMavenLocal :kirora-sdk-push:publishToMavenLocal
-```
-
-```groovy
-// android/build.gradle
-allprojects { repositories { mavenLocal { content { includeGroup "com.kirora" } } } }
-```
-
-`ext.kiroraAndroidSdkVersion` in the root project overrides the version. For iOS, add
+The iOS pods are not on CocoaPods yet: add
 `pod 'Kirora', :path => '/absolute/path/to/kirora-ios'` to your Podfile.
 
 ## Create one client

@@ -23,6 +23,6 @@ apply plugin: "com.facebook.react.rootproject"
 allprojects {
     repositories {
         // The Kirora Android SDK isn't published yet: kirora-android's `publishToMavenLocal`.
-        mavenLocal { content { includeGroup "com.kirora" } }
+        mavenLocal { content { includeGroup "io.kirora" } }
     }
 }
