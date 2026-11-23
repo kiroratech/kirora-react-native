@@ -39,18 +39,9 @@ jobs:
       - run: npm run typecheck
       - run: npm test -- --ci
       - name: The bundled kirora-ios matches its tag
-        run: |
-          tag="$(cut -d' ' -f1 ios/vendor/kirora-ios/VERSION)"
-          if [ "$tag" = local ]; then
-            echo "ios/vendor/kirora-ios was synced from a local checkout: sync it from a release tag" >&2
-            exit 1
-          fi
-          scripts/sync-kirora-ios.sh "$tag"
-          if [ -n "$(git status --porcelain -- ios/vendor)" ]; then
-            git status --short -- ios/vendor
-            echo "ios/vendor/kirora-ios differs from kirora-ios $tag: run scripts/sync-kirora-ios.sh $tag" >&2
-            exit 1
-          fi
+        run: scripts/check-bundled-ios.sh
+      - name: Release plan tests
+        run: node --test scripts/release-plan.test.mjs
 
   android:
     name: Android (e2e-app)
