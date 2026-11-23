@@ -16,6 +16,7 @@
     "src",
     "!src/__tests__",
     "android",
+    "!android/src/test",
     "!android/build",
     "!android/.gradle",
     "ios",

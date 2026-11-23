@@ -9,8 +9,8 @@ on:
   workflow_dispatch:
     inputs:
       native_sdk_ref:
-        description: Branch, tag or commit of kirora-android and kirora-ios to build against
-        default: main
+        description: Branch, tag or commit of kirora-android (default main), and of kirora-ios instead of the bundled copy (default none)
+        default: ''
 
 permissions:
   contents: read
@@ -20,7 +20,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # The native Kirora SDKs aren't published yet: each native job builds them from their repos.
+  # The Android job builds kirora-android from its repo. iOS builds the kirora-ios copy bundled in
+  # ios/vendor, unless a run asks for another ref.
   NATIVE_SDK_REF: ${{ inputs.native_sdk_ref || 'main' }}
 
 jobs:
@@ -37,6 +38,19 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test -- --ci
+      - name: The bundled kirora-ios matches its tag
+        run: |
+          tag="$(cut -d' ' -f1 ios/vendor/kirora-ios/VERSION)"
+          if [ "$tag" = local ]; then
+            echo "ios/vendor/kirora-ios was synced from a local checkout: sync it from a release tag" >&2
+            exit 1
+          fi
+          scripts/sync-kirora-ios.sh "$tag"
+          if [ -n "$(git status --porcelain -- ios/vendor)" ]; then
+            git status --short -- ios/vendor
+            echo "ios/vendor/kirora-ios differs from kirora-ios $tag: run scripts/sync-kirora-ios.sh $tag" >&2
+            exit 1
+          fi
 
   android:
     name: Android (e2e-app)
@@ -88,10 +102,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
+        if: inputs.native_sdk_ref
         with:
           repository: kiroratech/kirora-ios
           ref: ${{ env.NATIVE_SDK_REF }}
           path: kirora-ios
+      - name: Bundle the requested kirora-ios
+        if: inputs.native_sdk_ref
+        run: scripts/sync-kirora-ios.sh kirora-ios
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -108,10 +126,9 @@ jobs:
       - name: Install the e2e app
         working-directory: e2e-app
         run: npm ci
-      - name: Install pods (Kirora from the checkout)
+      - name: Install pods
         working-directory: e2e-app/ios
         env:
-          KIRORA_IOS_PATH: ${{ github.workspace }}/kirora-ios
           # React Native's prebuilt core, instead of compiling it on every run.
           RCT_USE_PREBUILT_RNCORE: 1
           RCT_USE_RN_DEP: 1

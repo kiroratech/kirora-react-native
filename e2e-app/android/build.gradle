@@ -22,7 +22,7 @@ apply plugin: "com.facebook.react.rootproject"
 
 allprojects {
     repositories {
-        // The Kirora Android SDK isn't published yet: kirora-android's `publishToMavenLocal`.
-        mavenLocal { content { includeGroup "com.kirora" } }
+        // A kirora-android build from `publishToMavenLocal` (CI's), ahead of Maven Central's.
+        mavenLocal { content { includeGroup "io.kirora" } }
     }
 }

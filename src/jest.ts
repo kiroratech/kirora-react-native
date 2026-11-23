@@ -41,4 +41,5 @@ export class Kirora {
   onNotificationClicked = jest.fn((_listener: (data: Record<string, string>) => void) => () => undefined);
   onNotificationReceived = jest.fn((_listener: (data: Record<string, string>) => void) => () => undefined);
   onNewPushToken = jest.fn((_token: string) => undefined);
+  onPushRegistered = jest.fn((_installationId: string) => undefined);
 }

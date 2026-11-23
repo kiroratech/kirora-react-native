@@ -40,8 +40,8 @@ def kiroraSdkVersion = safeExtGet('kiroraAndroidSdkVersion', '0.1.0')
 dependencies {
   implementation 'com.facebook.react:react-android'
   // The core SDK, and the Firebase side of push (FCM service, notification permission).
-  api "com.kirora:android-sdk:${kiroraSdkVersion}"
-  implementation "com.kirora:android-sdk-push:${kiroraSdkVersion}"
+  api "io.kirora:android-sdk:${kiroraSdkVersion}"
+  implementation "io.kirora:android-sdk-push:${kiroraSdkVersion}"
 
   // KiroraSdkModuleTest: run from a host app build, which supplies react-android.
   testImplementation 'junit:junit:4.13.2'

@@ -9,6 +9,8 @@ export type PushPermission = 'granted' | 'denied' | 'unanswered' | 'unsupported'
 /**
  * The answers of `getPushStatus()`. The platform's permission comes first; with it granted,
  * `enabled` when this device is registered for the signed-in user, `disabled` otherwise.
+ * `denied` means blocked in system settings: the permission, or on Android Kirora's
+ * notification channel turned off (the permission then still reads `granted`).
  */
 export type PushStatus = 'enabled' | 'disabled' | 'denied' | 'unanswered' | 'unsupported';
 

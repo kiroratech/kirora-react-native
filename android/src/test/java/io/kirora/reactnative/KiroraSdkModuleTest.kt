@@ -99,6 +99,7 @@ class KiroraSdkModuleTest {
         module.trackScreenView("Home")
         module.setTrackingConsent(false)
         module.onNewPushToken("fcm-1")
+        module.onPushRegistered("fid-1")
         module.setNotificationEvents(true, true)
     }
 

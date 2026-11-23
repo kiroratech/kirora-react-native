@@ -19,11 +19,11 @@ buildscript {
     }
 }
 
-// Development: the Kirora Android SDK is published here by
-// `./gradlew publishToMavenLocal` in kirora-android (it isn't on a public repository yet).
+// The Kirora Android SDK comes from Maven Central. To try a kirora-android checkout, publish it
+// with `./gradlew publishToMavenLocal` there; this build prefers that copy.
 allprojects {
     repositories {
-        mavenLocal { content { includeGroup "com.kirora" } }
+        mavenLocal { content { includeGroup "io.kirora" } }
     }
 }
 
