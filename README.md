@@ -1,36 +1,27 @@
 # Kirora React Native SDK
 
+[![CI](https://github.com/kiroratech/kirora-react-native/actions/workflows/ci.yml/badge.svg)](https://github.com/kiroratech/kirora-react-native/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Send what signed-in users do in your React Native app to Kirora, and register their devices
 for Kirora push. One TypeScript API over Kirora's native Android and iOS SDKs, which store
 events and handle sessions, consent, retries and notifications.
 
-**Preview: 0.1.0.** Not yet published to npm. See [What has been verified](#what-has-been-verified).
-A successful JavaScript call does not prove delivery: test the native artifacts your app resolves.
+**Preview: 0.1.0.** Not yet published to npm. A successful JavaScript call does not prove
+delivery: test the native artifacts your app resolves ([CHANGELOG](CHANGELOG.md) lists what has
+been verified).
 
-## Terms used here
+## Requirements
 
-| Term | Meaning |
-| --- | --- |
-| **Contact** | One person in your Kirora workspace, owning events, devices and consent. |
-| **User** | The person signed in to your app. Kirora matches them to the contact whose `externalId` equals the user token's `sub`. |
-| **Client key** | The workspace's public key (`kirora_pk_…`). Safe to ship. |
-| **User token** | A short-lived token your server signs for one user. Never signed in the app. |
-| **Event** | Something the user did: a name (`Order Completed`) and **properties** (`{ order_id: 'ORD-1042' }`). |
-| **Session** | A visit. It starts with `Session Started`. Time in the foreground keeps it alive; it ends after 30 minutes in the background. |
+| Component | Declared | Tested |
+| --- | --- | --- |
+| React Native | Peer dependency `>=0.71.0`. Uses legacy native-module APIs through the interop layer. | 0.88.1 only |
+| Android | API 24+, `compileSdkVersion` 35 or later | JDK 17, Kotlin 2.2.0, Gradle 9.4.1, `compileSdkVersion` 37 |
+| iOS | iOS 13+, Swift 5.9 | |
+| Expo | A development build. Expo Go can't load native modules. | SDK 58 |
+| Web | Not supported: `isAvailable` is false and every call does nothing. Use `@kirora/web`. | |
 
-There are no anonymous contacts. Events tracked before the first `identify()` wait on the
-device and go to the next user who signs in. Nothing is sent while nobody is signed in.
-
-## Requirements and installation
-
-| Component | Requirement |
-| --- | --- |
-| React Native | Peer dependency `>=0.71.0`; tested with 0.88.1 only. Uses legacy native-module APIs through the interop layer. |
-| Android | API 24+. `compileSdkVersion` 35 or later. Tested with JDK 17, Kotlin 2.2.0, Gradle 9.4.1 and `compileSdkVersion` 37. |
-| iOS | iOS 13+, Swift 5.9. |
-| Expo | A development build. Expo Go can't load native modules. |
-| Web | Not supported: `isAvailable` is false and every call does nothing. Use `@kirora/web`. |
-| Native SDKs | Android: Kirora `0.1.0` from Maven Central. iOS: Kirora `0.1.0`, bundled in this package. |
+## Install
 
 Once the package is in your registry:
 
@@ -48,20 +39,18 @@ Rebuild the native app; a Metro reload can't add a native module.
 Without the native module, `kirora.isAvailable` is false and every method does nothing
 (push methods return `unsupported`).
 
-### Native SDKs
+**Native SDKs.** Android links `io.kirora:android-sdk` and `io.kirora:android-sdk-push` (which
+adds Firebase Messaging) 0.1.0 from Maven Central; `ext.kiroraAndroidSdkVersion` in the root
+project overrides the version. iOS needs nothing from CocoaPods trunk: this package bundles the
+Kirora iOS SDK 0.1.0 (`ios/vendor/kirora-ios`, version in its `VERSION` file) and builds it
+into its own pod. Don't also add Kirora iOS to the app: two copies would each register for
+push. An iOS SDK update comes with a new release of this package.
 
-Android links `io.kirora:android-sdk` and `io.kirora:android-sdk-push` (which adds Firebase
-Messaging) from Maven Central. `ext.kiroraAndroidSdkVersion` in the root project overrides the
-version.
+## Quick start: a first event
 
-iOS needs nothing from CocoaPods trunk: this package bundles the Kirora iOS SDK
-(`ios/vendor/kirora-ios`, version in its `VERSION` file) and builds it into its own pod. Don't
-also add Kirora iOS to the app: two copies would each register for push. An iOS SDK update comes
-with a new release of this package.
-
-## Create one client
-
-Create the client once, at startup, outside render functions. `authApi` is your own server client.
+**1. Create one client**, once, at startup, outside render functions (a new one replaces the
+previous). The client key is your
+workspace's public key (`kirora_pk_…`), safe to ship. `authApi` is your own server client.
 
 ```ts
 import { Kirora } from '@kirora/react-native';
@@ -73,16 +62,13 @@ export const kirora = new Kirora({
 });
 ```
 
-**Keep the secret that signs user tokens, and every server API key, on your server.** Your
-server signs an HS256 JWT whose `sub` is the contact's `externalId`, with `iat` and `exp` in
-seconds, valid for at most 24 hours and issued at most 60 seconds ahead of Kirora's clock.
+**2. Sign the user token on your server.** Keep the secret that signs user tokens, and every
+server API key, on your server. Your server signs an HS256 JWT whose `sub` is the contact's
+`externalId`, with `iat` and `exp` in seconds, valid for at most 24 hours and issued at most
+60 seconds ahead of Kirora's clock. A contact is one person in your workspace; Kirora matches
+the signed-in user to the contact whose `externalId` equals the token's `sub`.
 
-`requireTrackingConsent: true` tracks nothing until `setTrackingConsent(true)`; without it,
-tracking is on unless the user refused. A new client replaces the previous one.
-
-## Identify and sign out
-
-Call `identify()` after sign-in and on every app start while the user is signed in.
+**3. Identify** after sign-in and on every app start while the user is signed in:
 
 ```ts
 try {
@@ -92,131 +78,53 @@ try {
 }
 ```
 
-The SDK also calls `fetchUserToken` 60 seconds before expiry, on returning to the foreground
-with an expired token, and after Kirora refuses one. No token (`null`,
-`undefined`, `''`) or no answer within 30 seconds is a failure: `identify()` rejects with
-`UserTokenError`.
-
-`onAuthenticationFailed` reports a token failure in the background: `fetch_failed`
-or `refused` (Kirora refused a fresh token). It fires once per failure, not per retry, and
-not for errors a method rejects with or during sign-out. Events keep waiting.
+**4. Record consent.** `requireTrackingConsent: true` tracks nothing until
+`setTrackingConsent(true)`; without it, tracking is on unless the user refused.
 
 ```ts
-onAuthenticationFailed: (reason) => {
-  // Restore your session, then call identify() again.
-},
+kirora.setTrackingConsent(true); // once the user agrees
 ```
 
-Each event belongs to the user signed in when it was tracked. If another user signs in
-without `logout()`, the earlier user's waiting events are never sent as the new user. They
-are sent when that earlier user signs in again, unless the queue evicted them first.
-
-### Sign-out
-
-Call `logout()` only from your app's sign-out, and let it finish before the next sign-in.
-
-```ts
-await kirora.logout();
-```
-
-Within five seconds it tries to send waiting events and detach the device, then forgets the
-user and unsent events. Neither is guaranteed.
-
-- **A failed detach** (offline, say) is saved and retried for 24 hours, including after a
-  relaunch. It uses a per-installation device secret that can only detach the device. A
-  final refusal from Kirora ends the retries.
-- **With nobody signed in** (after a relaunch, before `identify()`), `logout()` still
-  detaches the device. It drops only the waiting events that continued a signed-in user's
-  visit, so they never pass to the next user. A visitor who never signed in keeps their
-  events. With `trackSessions: false` nothing is dropped.
-
-`destroy()` only stops this client's timers and listeners (hot reload, tests). It isn't sign-out.
-
-## Track events and screens
+**5. Track:**
 
 ```ts
 kirora.track('Order Completed', { order_id: 'ORD-1042', total: 12500, currency: 'NGN' });
 kirora.trackScreenView('Checkout');
 ```
 
-Set `trackSessions` (default `true`) and `trackAppLifecycle` (default `false`) at
-construction. The SDK queues up to 1,000 events, evicting the oldest. It sends at 20
-events, every 30 seconds and on going to the background. `await kirora.flush()` sends now,
-within consent and server backoff; it isn't a delivery receipt. Events land on the user's
-contact, where segments, journeys, campaigns and conversion goals use them.
+**6. Check it in Kirora** on the contact whose `externalId` is the token's `sub`. Events go
+in batches; `await kirora.flush()` sends now.
 
-### Naming events and properties
+There are no anonymous contacts. Events tracked before the first `identify()` wait on the
+device and go to the next user who signs in. Nothing is sent while nobody is signed in.
 
-Kirora matches event names exactly (`Order Completed` is not `order completed`).
+## Quick start: a first push
 
-- **Events:** Title Case, object then past-tense action (`Plan Upgraded`). Values that vary
-  go in properties. Up to 128 characters; 1,000 distinct names per workspace.
-- **Properties:** snake_case (`order_id`), up to 64 characters, 16 KB in all as JSON. Keep
-  each type stable; send amounts in major units (naira, not kobo).
-- **Reserved:** `contact.` names are refused. Send `Screen Viewed`, `Session Started` and
-  `Application …` events only through the SDK's own options and methods.
+1. **Configure a push app in Kirora** for each platform: FCM for Android, APNs or Firebase for
+   iOS.
+2. **Set up the native side**: [Android](#android--fcm) and [iOS](#ios--apns-or-firebase)
+   below. On Expo, the plugin does the iOS part.
+3. **Turn push on** in the client's options:
 
-The server enforces these limits. Properties must be JSON values; `undefined` members are
-left out and dates become ISO strings. Anything else (cycles, functions, `Map`, `NaN`, a
-throwing getter) drops the event with a log. `track` never throws.
+   ```ts
+   push: true
+   // or: push: { pushAppId: 'YOUR_PUSH_APP_ID' }
+   ```
 
-### Redact app properties before native storage
+4. **Ask for permission** after `identify()`. A granted permission registers the device for
+   the signed-in user.
 
-```ts
-beforeSend: (event) => {
-  if (event.name === 'Sensitive Action') return null;
-  const properties = { ...event.properties };
-  delete properties.email;
-  return { ...event, properties };
-},
-```
+   ```ts
+   const permission = await kirora.requestPushPermission();
+   // 'granted' | 'denied' | 'unanswered' | 'unsupported'
+   ```
 
-Copy and delete; don't destructure (`const { email, ...rest } = …`). React Native's Babel
-turns a `__proto__` property into the copy's prototype, and a non-plain object drops the event.
-
-`beforeSend` sees `track` and `trackScreenView` events and must return synchronously (the first
-events wait until native tracking consent is known). Return the event,
-or `null` to drop it; a promise or an error also drops it. `context` is empty: native code
-adds it later, and automatic events skip the hook. Keep it free of side effects.
-
-## Consent and device push settings
-
-| API | Controls |
-| --- | --- |
-| `setTrackingConsent(granted)` | Behavioural tracking: events, screens, sessions, lifecycle events and app-open times. Stored on the device. |
-| `setPushConsent(granted)` | The signed-in user's marketing push choice, saved by Kirora. |
-| `requestPushPermission()` | The OS notification prompt. Not marketing consent. |
-| `setPushEnabled(enabled)` | This device's push on/off, kept across sign-out. Never prompts. |
-
-After `setTrackingConsent(false)`, native code stops tracking and forgets the waiting events.
-JavaScript also drops later `track` and `trackScreenView` calls, even if the native call
-failed. Data Kirora already accepted is not removed.
-
-Save marketing consent after `identify()`, and handle failure:
-
-```ts
-try {
-  await kirora.setPushConsent(userAcceptedMarketingPush);
-  // Show the choice as saved only now.
-} catch (error) {
-  // Keep the previous choice and offer a retry.
-}
-```
-
-Marketing push needs push consent, OS permission and a registered device (see
-[Set up push](#set-up-push)); transactional push needs the permission and a registered
-device, not push consent. Push registration and reports continue while tracking is refused.
-`setPushEnabled(false)` detaches the device; `true`, or a granted permission request,
-registers it again.
-
-## Set up push
-
-Turn it on in the client's options:
-
-```ts
-push: true
-// or: push: { pushAppId: 'YOUR_PUSH_APP_ID' }
-```
+5. **For marketing push, save consent** with `setPushConsent(true)` (see
+   [Consent](#consent-and-device-push-settings)). Transactional push needs the permission and
+   a registered device, not push consent; marketing push needs all three.
+6. **Send a test push** to that contact from Kirora, then check that it arrives, that a tap
+   opens its link, and that the campaign reports the delivery and the tap.
+   `await kirora.getPushStatus()` answers `enabled` when this device can receive Kirora push.
 
 ### Android / FCM
 
@@ -260,12 +168,121 @@ pod 'KiroraNotificationService', :path => File.join(File.dirname(`node --print "
 It can't read the client's options: with a custom `apiUrl`, set the same value as
 `KiroraApiUrl` in the extension's Info.plist, or as `ios.apiUrl` in the Expo plugin.
 
-### Ask for permission and observe notifications
+## Identity and sign-out
+
+The SDK also calls `fetchUserToken` 60 seconds before expiry, on returning to the foreground
+with an expired token, and after Kirora refuses one. No token (`null`, `undefined`, `''`) or no
+answer within 30 seconds is a failure: `identify()` rejects with `UserTokenError`.
+
+`onAuthenticationFailed` reports a token failure in the background: `fetch_failed`
+or `refused` (Kirora refused a fresh token). It fires once per failure, not per retry, and
+not for errors a method rejects with or during sign-out. Events keep waiting.
 
 ```ts
-const permission = await kirora.requestPushPermission();
-// 'granted' | 'denied' | 'unanswered' | 'unsupported'
+onAuthenticationFailed: (reason) => {
+  // Restore your session, then call identify() again.
+},
+```
 
+Each event belongs to the user signed in when it was tracked. If another user signs in
+without `logout()`, the earlier user's waiting events are never sent as the new user. They
+are sent when that earlier user signs in again, unless the queue evicted them first.
+
+### Sign-out
+
+Call `logout()` only from your app's sign-out, and let it finish before the next sign-in.
+
+```ts
+await kirora.logout();
+```
+
+Within five seconds it tries to send waiting events and detach the device, then forgets the
+user and unsent events. Neither is guaranteed.
+
+- **A failed detach** (offline, say) is saved and retried for 24 hours, including after a
+  relaunch. It uses a per-installation device secret that can only detach the device. A
+  final refusal from Kirora ends the retries.
+- **With nobody signed in** (after a relaunch, before `identify()`), `logout()` still
+  detaches the device. It drops only the waiting events that continued a signed-in user's
+  visit, so they never pass to the next user. A visitor who never signed in keeps their
+  events. With `trackSessions: false` nothing is dropped.
+
+`destroy()` only stops this client's timers and listeners (hot reload, tests). It isn't sign-out.
+
+## Consent and device push settings
+
+| API | Controls |
+| --- | --- |
+| `setTrackingConsent(granted)` | Behavioural tracking: events, screens, sessions, lifecycle events and app-open times. Stored on the device. |
+| `setPushConsent(granted)` | The signed-in user's marketing push choice, saved by Kirora. |
+| `requestPushPermission()` | The OS notification prompt. Not marketing consent. |
+| `setPushEnabled(enabled)` | This device's push on/off, kept across sign-out. Never prompts. |
+
+After `setTrackingConsent(false)`, native code stops tracking and forgets the waiting events.
+JavaScript also drops later `track` and `trackScreenView` calls, even if the native call
+failed. Data Kirora already accepted is not removed.
+
+Save marketing consent after `identify()`, and handle failure:
+
+```ts
+try {
+  await kirora.setPushConsent(userAcceptedMarketingPush);
+  // Show the choice as saved only now.
+} catch (error) {
+  // Keep the previous choice and offer a retry.
+}
+```
+
+Push registration and reports continue while tracking is refused. `setPushEnabled(false)` detaches the device; `true`, or a
+granted permission request, registers it again.
+
+## Track events and screens
+
+Set `trackSessions` (default `true`) and `trackAppLifecycle` (default `false`) at
+construction. A session is a visit: it starts with `Session Started`, time in the foreground
+keeps it alive, and it ends after 30 minutes in the background. The SDK queues up to 1,000
+events, evicting the oldest. It sends at 20 events, every 30 seconds and on going to the
+background. `await kirora.flush()` sends now, within consent and server backoff; it isn't a
+delivery receipt. Events land on the user's contact, where segments, journeys, campaigns and
+conversion goals use them.
+
+### Naming events and properties
+
+Kirora matches event names exactly (`Order Completed` is not `order completed`).
+
+- **Events:** Title Case, object then past-tense action (`Plan Upgraded`). Values that vary
+  go in properties. Up to 128 characters; 1,000 distinct names per workspace.
+- **Properties:** snake_case (`order_id`), up to 64 characters, 16 KB in all as JSON. Keep
+  each type stable; send amounts in major units (naira, not kobo).
+- **Reserved:** `contact.` names are refused. Send `Screen Viewed`, `Session Started` and
+  `Application …` events only through the SDK's own options and methods.
+
+The server enforces these limits. Properties must be JSON values; `undefined` members are
+left out and dates become ISO strings. Anything else (cycles, functions, `Map`, `NaN`, a
+throwing getter) drops the event with a log. `track` never throws.
+
+### Redact app properties before native storage
+
+```ts
+beforeSend: (event) => {
+  if (event.name === 'Sensitive Action') return null;
+  const properties = { ...event.properties };
+  delete properties.email;
+  return { ...event, properties };
+},
+```
+
+Copy and delete; don't destructure (`const { email, ...rest } = …`). React Native's Babel
+turns a `__proto__` property into the copy's prototype, and a non-plain object drops the event.
+
+`beforeSend` sees `track` and `trackScreenView` events and must return synchronously (the first
+events wait until native tracking consent is known). Return the event, or `null` to drop it; a
+promise or an error also drops it. `context` is empty: native code adds it later, and automatic
+events skip the hook. Keep it free of side effects.
+
+## Notifications and links
+
+```ts
 const status = await kirora.getPushStatus();
 // 'enabled' | 'disabled' | 'denied' | 'unanswered' | 'unsupported'
 
@@ -275,9 +292,6 @@ const offReceived = kirora.onNotificationReceived((data) => { /* Android only */
 offClick();
 offReceived();
 ```
-
-`getPushStatus()` answers `denied` when system settings block the permission or, on
-Android, Kirora's channel. Send the user to `Linking.openSettings()` then.
 
 Native code reports the tap and opens its link. `onNotificationClicked` runs after native
 code has waited up to 1.5 seconds for that report, which may not have finished. Taps before
@@ -301,9 +315,10 @@ it. After 1.5 seconds native code opens it anyway. On a cold start it waits up t
 for the client. Don't also open the URL in `onNotificationClicked`.
 
 On iOS, claim your universal links in `handleDeepLink`, or list their hosts in Info.plist
-`KiroraUniversalLinkHosts` (the Expo plugin fills it from `ios.associatedDomains`). Otherwise an `https` link opens in Safari or the app that owns it.
+`KiroraUniversalLinkHosts` (the Expo plugin fills it from `ios.associatedDomains`). Otherwise
+an `https` link opens in Safari or the app that owns it.
 
-## Read state and handle failures
+## State and errors
 
 ```ts
 const state = await kirora.getState();
@@ -329,12 +344,24 @@ tokens stay in memory. This package stores nothing itself.
 
 Each event's `context` holds the device id, session, locale, time zone, app name, version,
 build and bundle id or package name, OS name and version, screen size and density, and
-device manufacturer and type. No device model or network details. Kirora also records each request's IP address, user agent and sending library.
+device manufacturer and type. No device model or network details. Kirora also records each
+request's IP address, user agent and sending library.
 
 Push reporting sends the app and OS version, language and time zone at registration; app
 open times (only with tracking consent); and when a Kirora notification is shown or tapped.
 `beforeSend` can't redact any of this. No hardware or advertising id is sent; the device id
 is deleted with the app.
+
+## Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| `kirora.isAvailable` is false | The native module isn't linked: rebuild the native app (Expo: prebuild and a development build, not Expo Go). |
+| `identify()` rejects with `UserTokenError` | `fetchUserToken` returned no token or took over 30 seconds. |
+| Events don't appear | The user is identified and tracking consent is granted; `getState()` shows `queuedEventCount`. |
+| `getPushStatus()` is `denied` | System settings block notifications (or, on Android, Kirora's channel): send the user to `Linking.openSettings()`. |
+| iOS pushes lack images, buttons or delivery reports | The Notification Service Extension is set up, and pushes carry `mutable-content: 1`. |
+| An iOS push's `https` link opens Safari | Handle it in `handleDeepLink` or list its host in `KiroraUniversalLinkHosts`. |
 
 ## Differences from Kirora's other SDKs
 
@@ -347,24 +374,12 @@ is deleted with the app.
 | `getState()` returns a promise | Synchronous on iOS, `suspend` on Android | Read across the bridge |
 | `trackScreenView(name)` | `trackPageView()` on web | Platform |
 
-## Jest mock and source development
+## More
 
-In your app's Jest tests:
-
-```js
-jest.mock('@kirora/react-native', () => require('@kirora/react-native/jest'));
-```
-
-The mock records calls with `jest.fn()` and does nothing else. To work on this package, run
-`npm install`, `npm run typecheck`, `npm test` and `npm run build`; `example/` and `e2e-app/`
-have their own READMEs.
-
-## What has been verified
-
-- **CI** (pull requests and pushes to `main`, skipping Markdown, `docs/` and `LICENSE` changes): typecheck, build, Jest, Android bridge unit tests, Android and iOS-simulator builds of `e2e-app/`. Locally: `e2e-app/` scenarios on an Android emulator.
-- **Devices** (Expo example, React Native 0.88.1, staging): an Android phone (21 Nov 2026) and an iPhone with iOS SDK `7b4049c` (22 Nov 2026). Identify, events, push registration, image push with the app killed, link tap, inbox, an action button opening an `https` link, sign-out detach, and an offline sign-out retried after relaunch. Rechecked on the iPhone with the bundled iOS SDK 0.1.0 (23 Nov 2026): registration, delivery report, tap and sign-out detach.
-- **Not verified:** install from npm, `import kirora_react_native` for hand-wired push callbacks, the full React Native range, offline event delivery on a device, and the device-secret detach on a device (unit-tested in the iOS SDK).
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+- **Testing your app:** mock the SDK in Jest with
+  `jest.mock('@kirora/react-native', () => require('@kirora/react-native/jest'));`. The mock
+  records calls with `jest.fn()` and does nothing else.
+- **Examples:** [`example/`](example) (bare React Native, Android) and the
+  [Expo example](https://github.com/kiroratech/kirora-expo-plugin/tree/main/example).
+- **Changes:** [CHANGELOG](CHANGELOG.md). **Contributing:** [CONTRIBUTING](CONTRIBUTING.md).
+- **License:** MIT. See [LICENSE](LICENSE).
