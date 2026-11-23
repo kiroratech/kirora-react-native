@@ -27,10 +27,10 @@ device and go to the next user who signs in. Nothing is sent while nobody is sig
 | --- | --- |
 | React Native | Peer dependency `>=0.71.0`; tested with 0.88.1 only. Uses legacy native-module APIs through the interop layer. |
 | Android | API 24+. `compileSdkVersion` 35 or later. Tested with JDK 17, Kotlin 2.2.0, Gradle 9.4.1 and `compileSdkVersion` 37. |
-| iOS | iOS 13+, Swift 5.9. Needs the Kirora iOS SDK 0.1.0 or later. |
+| iOS | iOS 13+, Swift 5.9. |
 | Expo | A development build. Expo Go can't load native modules. |
 | Web | Not supported: `isAvailable` is false and every call does nothing. Use `@kirora/web`. |
-| Native releases | Android defaults to Kirora `0.1.0`; iOS depends on `Kirora ~> 0.1`. |
+| Native SDKs | Android: Kirora `0.1.0` from Maven Central. iOS: Kirora `0.1.0`, bundled in this package. |
 
 Once the package is in your registry:
 
@@ -48,14 +48,16 @@ Rebuild the native app; a Metro reload can't add a native module.
 Without the native module, `kirora.isAvailable` is false and every method does nothing
 (push methods return `unsupported`).
 
-### Local native dependencies during development
+### Native SDKs
 
 Android links `io.kirora:android-sdk` and `io.kirora:android-sdk-push` (which adds Firebase
 Messaging) from Maven Central. `ext.kiroraAndroidSdkVersion` in the root project overrides the
 version.
 
-The iOS pods are not on CocoaPods yet: add
-`pod 'Kirora', :path => '/absolute/path/to/kirora-ios'` to your Podfile.
+iOS needs nothing from CocoaPods trunk: this package bundles the Kirora iOS SDK
+(`ios/vendor/kirora-ios`, version in its `VERSION` file) and builds it into its own pod. Don't
+also add Kirora iOS to the app: two copies would each register for push. An iOS SDK update comes
+with a new release of this package.
 
 ## Create one client
 
@@ -239,12 +241,19 @@ push: {
 
 Enable Push Notifications and configure the matching Kirora push app. With
 `KiroraAppDelegateProxyEnabled = NO`, wire the callbacks as the
-[native iOS guide](https://github.com/kiroratech/kirora-ios#readme) describes. A Firebase push
-app needs Firebase's iOS integration, which `push: true` doesn't install.
+[native iOS guide](https://github.com/kiroratech/kirora-ios#readme) describes, with
+`import kirora_react_native` in place of `import Kirora`. A Firebase push app needs Firebase's
+iOS integration, which `push: true` doesn't install.
 
 Delivery reports and images need a Notification Service Extension with
 `KiroraNotificationService`, set up as the native iOS guide describes (the Expo plugin adds
-it). It can't read the client's options: with a custom `apiUrl`, set the same value as
+it). Take the pod from this package, in the extension's Podfile target:
+
+```ruby
+pod 'KiroraNotificationService', :path => '../node_modules/@kirora/react-native/ios/vendor/kirora-ios'
+```
+
+It can't read the client's options: with a custom `apiUrl`, set the same value as
 `KiroraApiUrl` in the extension's Info.plist, or as `ios.apiUrl` in the Expo plugin.
 
 ### Ask for permission and observe notifications
@@ -349,8 +358,8 @@ have their own READMEs.
 ## What has been verified
 
 - **CI** (pull requests and pushes to `main`, skipping Markdown, `docs/` and `LICENSE` changes): typecheck, build, Jest, Android bridge unit tests, Android and iOS-simulator builds of `e2e-app/`. Locally: `e2e-app/` scenarios on an Android emulator.
-- **Devices** (Expo example, React Native 0.88.1, staging): an Android phone (21 Nov 2026) and an iPhone with iOS SDK `7b4049c` (22 Nov 2026). Identify, events, push registration, image push with the app killed, link tap, inbox, an action button opening an `https` link, sign-out detach, and an offline sign-out retried after relaunch. Rechecked on the iPhone with iOS SDK `afb79fc` (23 Nov 2026): registration, delivery report, link tap, inbox and sign-out detach.
-- **Not verified:** npm/CocoaPods install, the full React Native range, offline event delivery on a device, and the device-secret detach on a device (unit-tested in the iOS SDK).
+- **Devices** (Expo example, React Native 0.88.1, staging): an Android phone (21 Nov 2026) and an iPhone with iOS SDK `7b4049c` (22 Nov 2026). Identify, events, push registration, image push with the app killed, link tap, inbox, an action button opening an `https` link, sign-out detach, and an offline sign-out retried after relaunch. Rechecked on the iPhone with the bundled iOS SDK 0.1.0 (23 Nov 2026): registration, delivery report, tap and sign-out detach.
+- **Not verified:** install from npm, `import kirora_react_native` for hand-wired push callbacks, the full React Native range, offline event delivery on a device, and the device-secret detach on a device (unit-tested in the iOS SDK).
 
 ## License
 

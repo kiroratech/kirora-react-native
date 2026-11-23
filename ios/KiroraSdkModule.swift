@@ -1,6 +1,5 @@
 import Foundation
 import React
-@_spi(Wrapper) import Kirora
 
 /// Hands the JavaScript `Kirora` class to the native Kirora iOS SDK, with the same methods and
 /// events as the Android module, so `NativeBackend` drives both. The SDK does the work; this

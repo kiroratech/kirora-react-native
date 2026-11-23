@@ -26,5 +26,6 @@ line, so keep both when changing `App.tsx`.
 
 ## iOS
 
-The Podfile takes the Kirora iOS SDK from a checkout when `KIRORA_IOS_PATH` is set
-(`KIRORA_IOS_PATH=../../kirora-ios bundle exec pod install`), until the SDK is on CocoaPods.
+The Kirora iOS SDK comes with the package (`ios/vendor/kirora-ios`): `bundle exec pod install`
+needs nothing else. To build against a kirora-ios checkout, run
+`scripts/sync-kirora-ios.sh /path/to/kirora-ios` in the repository root first.
