@@ -54,23 +54,31 @@ class KiroraSdkModule(
     /** Asks waiting for JavaScript's answer: whether a link was opened, or a push is shown. */
     private val pendingAnswers = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
 
+    /** The current client and the notification events it sends, replaced as a whole by [swapClient]. */
+    private class Client(val kirora: Kirora) {
+        var clicksOn = false
+        var receivedOn = false
+    }
+
     @Volatile
-    private var kirora: Kirora? = null
+    private var client: Client? = null
+    private val kirora: Kirora? get() = client?.kirora
+
+    /** Set by [invalidate]: a set-up still finishing must not install a client after it. */
+    private var invalidated = false
 
     /** JavaScript subscriptions to this module's events: none means nothing would hear one. */
     private val listeners = AtomicInteger(0)
 
     private val clickListener: (Map<String, String>) -> Unit = { data -> emit(CLICKED_EVENT, data.toWritableMap()) }
     private val receivedListener: (Map<String, String>) -> Unit = { data -> emit(RECEIVED_EVENT, data.toWritableMap()) }
-    private var clicksOn = false
-    private var receivedOn = false
 
     @ReactMethod
     fun configure(options: ReadableMap, promise: Promise) {
         // The client before stops first: JavaScript sends calls without waiting for the answer, so
         // after a failed set-up they reach no client. The new one starts with no notification
         // events: its JavaScript turns on what it listens for, and the SDK holds taps until then.
-        stopClient()
+        swapClient(null)
         try {
             val provider: (suspend () -> String?)? =
                 if (options.getBoolean("hasTokenProvider")) ({ requestToken() }) else null
@@ -83,8 +91,7 @@ class KiroraSdkModule(
                 if (options.flag("hasDeepLinkHandler")) ({ url -> ask(DEEP_LINK_EVENT, false) { putString("url", url) } }) else null
             val foreground: (suspend (Map<String, String>) -> Boolean)? =
                 if (options.flag("hasForegroundHandler")) ({ data -> ask(FOREGROUND_EVENT, true) { putMap("data", data.toWritableMap()) } }) else null
-            Kirora.setWrapperCallbacks(deepLink, foreground)
-            // A new client replaces the one before it (the SDK destroys it).
+            if (!setWrapperCallbacks(deepLink, foreground)) return promise.reject("KIRORA_ERROR", "Kirora was stopped")
             val kirora = Kirora(
                 reactContext.applicationContext,
                 KiroraOptions(
@@ -103,7 +110,10 @@ class KiroraSdkModule(
                     apiUrl = options.stringOrNull("apiUrl") ?: "https://api.kirora.io"
                 )
             )
-            this.kirora = kirora
+            if (!swapClient(kirora)) {
+                kirora.destroy()
+                return promise.reject("KIRORA_ERROR", "Kirora was stopped")
+            }
             // Whether tracking is allowed now, so JavaScript's beforeSend never sees an event it isn't.
             promise.resolve(newMap().apply { putBoolean("trackingConsent", kirora.trackingConsent) })
         } catch (e: Exception) {
@@ -170,14 +180,41 @@ class KiroraSdkModule(
     /** Stops the client without sending or deleting anything; waiting events stay for the next one. */
     @ReactMethod
     fun destroy() {
-        Kirora.setWrapperCallbacks(null, null)
-        stopClient()
+        // After invalidate, the callbacks are the next context's (or "detached"): left alone.
+        setWrapperCallbacks(null, null)
+        swapClient(null)
     }
 
-    private fun stopClient() {
-        setNotificationEvents(clicked = false, received = false)
-        kirora?.destroy()
-        kirora = null
+    /**
+     * Points the SDK's process-wide link and foreground callbacks here; false, setting nothing, once
+     * [invalidate] has run. Locked with it, so callbacks set by a set-up that is still finishing are
+     * either replaced by its detach or never set.
+     */
+    @Synchronized
+    private fun setWrapperCallbacks(
+        deepLink: (suspend (String) -> Boolean)?,
+        foreground: (suspend (Map<String, String>) -> Boolean)?
+    ): Boolean {
+        if (invalidated) return false
+        Kirora.setWrapperCallbacks(deepLink, foreground)
+        return true
+    }
+
+    /**
+     * Stops the current client (its listeners off, then destroyed) and installs [next], or none.
+     * False, installing nothing, once [invalidate] has run. Under the same lock as
+     * [setNotificationEvents]: a reload's [invalidate] runs on another thread than JavaScript's calls.
+     */
+    @Synchronized
+    private fun swapClient(next: Kirora?): Boolean {
+        if (next != null && invalidated) return false
+        client?.let { old ->
+            if (old.clicksOn) old.kirora.removeNotificationClickListener(clickListener)
+            if (old.receivedOn) old.kirora.removeForegroundNotificationListener(receivedListener)
+            old.kirora.destroy()
+        }
+        client = next?.let(::Client)
+        return true
     }
 
     @ReactMethod
@@ -213,21 +250,19 @@ class KiroraSdkModule(
         }
     }
 
-    /**
-     * Starts or stops the `KiroraNotificationClicked` / `KiroraNotificationReceived` events.
-     * Synchronized: JavaScript's calls and a reload's [invalidate] may run on different threads.
-     */
+    /** Starts or stops the `KiroraNotificationClicked` / `KiroraNotificationReceived` events. */
     @Synchronized
     @ReactMethod
     fun setNotificationEvents(clicked: Boolean, received: Boolean) {
-        val kirora = kirora ?: return
-        if (clicked != clicksOn) {
-            clicksOn = clicked
+        val client = client ?: return
+        val kirora = client.kirora
+        if (clicked != client.clicksOn) {
+            client.clicksOn = clicked
             // Attaching delivers a tap that launched the app before JavaScript was listening.
             if (clicked) kirora.addNotificationClickListener(clickListener) else kirora.removeNotificationClickListener(clickListener)
         }
-        if (received != receivedOn) {
-            receivedOn = received
+        if (received != client.receivedOn) {
+            client.receivedOn = received
             if (received) kirora.addForegroundNotificationListener(receivedListener) else kirora.removeForegroundNotificationListener(receivedListener)
         }
     }
@@ -241,6 +276,11 @@ class KiroraSdkModule(
     @ReactMethod
     fun onNewPushToken(token: String) {
         kirora?.onNewPushToken(token)
+    }
+
+    @ReactMethod
+    fun onPushRegistered(installationId: String) {
+        kirora?.onPushRegistered(installationId)
     }
 
     @ReactMethod
@@ -269,11 +309,15 @@ class KiroraSdkModule(
         pendingTokens.clear()
         pendingAnswers.values.forEach { it.cancel() }
         pendingAnswers.clear()
-        // Not "set up with no handler": the next JavaScript context may set one, so a tap's
-        // link waits for it again (10 s at most) instead of opening at once.
-        Kirora.wrapperDetached()
-        // No JavaScript behind it any more (reload): stop it, as iOS does.
-        stopClient()
+        // No JavaScript behind it any more (reload): stop it, as iOS does, and refuse a set-up
+        // still finishing (see [setWrapperCallbacks] and [swapClient], locked with this).
+        synchronized(this) {
+            invalidated = true
+            // Not "set up with no handler": the next JavaScript context may set one, so a tap's
+            // link waits for it again (10 s at most) instead of opening at once.
+            Kirora.wrapperDetached()
+            swapClient(null)
+        }
         scope.cancel()
         super.invalidate()
     }

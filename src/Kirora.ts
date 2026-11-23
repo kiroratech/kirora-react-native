@@ -27,28 +27,31 @@ declare const require: (id: string) => any;
  * ```
  *
  * Every call goes to the native Kirora Android or iOS SDK. Where the native module isn't linked
- * (Expo Go), every call does nothing and one error says why. Create it once, at startup; a newer
+ * (Expo Go), and on other platforms (web, macOS, Windows), every call does nothing and one error
+ * says why. Create it once, at startup; a newer
  * client destroys the older one. No call blocks the app or throws because Kirora is unreachable.
  */
 export class Kirora {
   /** The most recently created instance. */
   static active: Kirora | null = null;
 
-  /** False where the native module isn't linked (Expo Go): then nothing is tracked or sent. */
+  /**
+   * False where the native module isn't linked (Expo Go) and on platforms other than Android and
+   * iOS (web: use `@kirora/web`): then nothing is tracked or sent.
+   */
   readonly isAvailable: boolean;
 
   private readonly backend: KiroraBackend;
 
   constructor(options: KiroraOptions, internals: KiroraInternals = {}) {
     const previous = Kirora.active;
-    const found = internals.native !== undefined ? internals.native ?? 'unlinked' : nativeFromRuntime();
-    const native = typeof found === 'object' ? found : undefined;
-    if (native) {
-      this.backend = new NativeBackend({ ...options, clientKey: (options.clientKey ?? '').trim() }, native.module, native.emitter);
+    const found = internals.native === undefined ? nativeFromRuntime() : internals.native ?? 'unlinked';
+    if (typeof found === 'object') {
+      this.backend = new NativeBackend({ ...options, clientKey: (options.clientKey ?? '').trim() }, found.module, found.emitter);
     } else {
-      this.backend = new UnavailableBackend(options.logLevel !== 'none', found as Unavailable);
+      this.backend = new UnavailableBackend(options.logLevel !== 'none', found);
     }
-    this.isAvailable = !!native;
+    this.isAvailable = typeof found === 'object';
     Kirora.active = this;
     // After this one's set-up, which replaced the native client: no longer current, the old one
     // only stops its own listeners.
@@ -68,7 +71,8 @@ export class Kirora {
 
   /**
    * Attempts to send the user's waiting events and detach the device within 5 seconds, then
-   * forgets the user and their unsent events. Never rejects; safe to call twice.
+   * forgets the user and their unsent events; a detach that fails is retried for 24 hours. Call
+   * it only from the app's sign-out. Never rejects; safe to call twice.
    */
   logout(): Promise<void> {
     return this.backend.logout();
@@ -169,6 +173,14 @@ export class Kirora {
     this.backend.onNewPushToken(token);
   }
 
+  /**
+   * Android: forward a Firebase installation ID when your messaging library hands you one instead of
+   * a token (with `firebase_messaging_installation_id_enabled`). The iOS SDK reads its own.
+   */
+  onPushRegistered(installationId: string): void {
+    this.backend.onPushRegistered(installationId);
+  }
+
   /** @internal */
   static resetForTesting(): void {
     Kirora.active?.destroy();
@@ -177,12 +189,14 @@ export class Kirora {
 
 /**
  * The native module and its emitter, on Android or iOS when the module is linked; otherwise why
- * not: not linked (Expo Go), or another platform (web).
+ * not: not linked (Expo Go), the web, or another platform (macOS, Windows).
  */
 function nativeFromRuntime(): NativeBridge | Unavailable {
   try {
     const rn = require('react-native');
-    if (rn.Platform.OS !== 'android' && rn.Platform.OS !== 'ios') return 'unsupported-platform';
+    const os = rn.Platform.OS;
+    if (os === 'web') return 'web';
+    if (os !== 'android' && os !== 'ios') return 'unsupported-platform';
     const module = rn.NativeModules?.KiroraSdk as NativeKiroraModule | undefined;
     if (!module) return 'unlinked';
     return { module, emitter: new rn.NativeEventEmitter(module) };

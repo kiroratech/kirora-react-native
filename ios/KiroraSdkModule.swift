@@ -32,6 +32,8 @@ final class KiroraSdkModule: RCTEventEmitter, @unchecked Sendable {
     private var kirora: Kirora?
     private var listening = false
     private var clicksOn = false
+    /// Set once the bridge tears the module down: a setup still finishing then installs nothing.
+    private var invalidated = false
     /// Asks waiting for JavaScript's answer: whether a link was opened, or a push is shown.
     private var pending: [String: (answer: CheckedContinuation<Bool, Never>, fallback: Bool)] = [:]
 
@@ -52,10 +54,13 @@ final class KiroraSdkModule: RCTEventEmitter, @unchecked Sendable {
     override func stopObserving() { locked { listening = false } }
 
     override func invalidate() {
+        locked {
+            invalidated = true
+            // Not "set up with no handler": the next JavaScript context may set one, so taps are
+            // held and a tap's link waits for it again (10 s at most) instead of opening at once.
+            KiroraWrapper.wrapperDetached()
+        }
         takeKirora()?.destroy()
-        // Not "set up with no handler": the next JavaScript context may set one, so taps are held
-        // and a tap's link waits for it again (10 s at most) instead of opening at once.
-        KiroraWrapper.wrapperDetached()
         locked { clicksOn = false }
         locked { () -> [(answer: CheckedContinuation<Bool, Never>, fallback: Bool)] in
             defer { pending = [:] }
@@ -75,8 +80,9 @@ final class KiroraSdkModule: RCTEventEmitter, @unchecked Sendable {
             KiroraWrapper.setSDK(name: "kirora-react-native", version: version)
         }
         let requests = tokenRequests
-        let push: PushOptions? = flag("push") ? PushOptions(pushAppId: string("pushAppId")) : nil
-        var fetchUserToken: (@Sendable () async throws -> String)?
+        let push: KiroraPushOptions? = flag("push") ? KiroraPushOptions(pushAppId: string("pushAppId")) : nil
+        // Optional, as the SDK's option is: nil or empty counts as a failed fetch.
+        var fetchUserToken: (@Sendable () async throws -> String?)?
         if flag("hasTokenProvider") {
             fetchUserToken = { try await requests.fetchUserToken() }
         }
@@ -102,14 +108,15 @@ final class KiroraSdkModule: RCTEventEmitter, @unchecked Sendable {
                 await self?.ask(Self.deepLinkEvent, ["url": url.absoluteString], fallback: false) ?? false
             }
         }
-        KiroraWrapper.setDeepLinkHandler(deepLink)
         var foreground: (@Sendable ([String: Any]) async -> Bool)?
         if flag("hasForegroundHandler") {
             foreground = { [weak self] data in
                 await self?.ask(Self.foregroundEvent, ["data": Self.notificationData(data)], fallback: true) ?? true
             }
         }
-        KiroraWrapper.setForegroundPresentationHandler(foreground)
+        guard setWrapperHandlers(deepLink, foreground) else {
+            return reject("KIRORA_ERROR", "Kirora was stopped", nil)
+        }
 
         // A new client starts with no notification events: its JavaScript turns on what it
         // listens for, so taps are held by the SDK until then, not sent to nobody.
@@ -117,7 +124,15 @@ final class KiroraSdkModule: RCTEventEmitter, @unchecked Sendable {
         let previous = locked { kirora }
         previous?.destroy()
         let created = Kirora(options: kiroraOptions)
-        locked { kirora = created }
+        let installed = locked { () -> Bool in
+            guard !invalidated else { return false }
+            kirora = created
+            return true
+        }
+        guard installed else {
+            created.destroy()
+            return reject("KIRORA_ERROR", "Kirora was stopped", nil)
+        }
         // Whether tracking is allowed now, so JavaScript's beforeSend never sees an event it isn't allowed to.
         resolve(["trackingConsent": created.trackingConsent])
     }
@@ -217,13 +232,32 @@ final class KiroraSdkModule: RCTEventEmitter, @unchecked Sendable {
         takeKirora()?.destroy()
         setNotificationEvents(false, received: false)
         // Nothing to ask any more: pushes show and links open at once, as without callbacks.
-        KiroraWrapper.setDeepLinkHandler(nil)
-        KiroraWrapper.setForegroundPresentationHandler(nil)
+        // After invalidate, the handlers are the next context's (or "detached"): left alone.
+        setWrapperHandlers(nil, nil)
+    }
+
+    /// Sets the SDK's process-wide handlers, unless the module was invalidated: then they belong
+    /// to the next JavaScript context. False when not set.
+    @discardableResult
+    private func setWrapperHandlers(
+        _ deepLink: (@Sendable (URL) async -> Bool)?,
+        _ foreground: (@Sendable ([String: Any]) async -> Bool)?
+    ) -> Bool {
+        locked {
+            guard !invalidated else { return false }
+            KiroraWrapper.setDeepLinkHandler(deepLink)
+            KiroraWrapper.setForegroundPresentationHandler(foreground)
+            return true
+        }
     }
 
     /// The SDK reads the APNs token itself.
     @objc(onNewPushToken:)
     func onNewPushToken(_ token: String) {}
+
+    /// Firebase installation IDs are Android only.
+    @objc(onPushRegistered:)
+    func onPushRegistered(_ installationId: String) {}
 
     // MARK: - Answers from JavaScript
 

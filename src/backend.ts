@@ -40,6 +40,7 @@ export interface KiroraBackend {
   destroy(stopNative: boolean): void;
   getState(): Promise<KiroraState>;
   onNewPushToken(token: string): void;
+  onPushRegistered(installationId: string): void;
   /** A tap on a Kirora notification or one of its buttons. A tap that launched the app is delivered when you attach. */
   onNotificationClicked(listener: (data: NotificationData) => void): () => void;
   /** A Kirora push arriving (Android). */

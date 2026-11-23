@@ -27,6 +27,7 @@ RCT_EXTERN_METHOD(flush:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseReje
 RCT_EXTERN_METHOD(getState:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(destroy)
 RCT_EXTERN_METHOD(onNewPushToken:(NSString *)token)
+RCT_EXTERN_METHOD(onPushRegistered:(NSString *)installationId)
 RCT_EXTERN_METHOD(resolveToken:(NSString *)requestId token:(NSString *)token error:(NSString *)error)
 RCT_EXTERN_METHOD(resolveAnswer:(NSString *)requestId answer:(BOOL)answer)
 RCT_EXTERN_METHOD(setNotificationEvents:(BOOL)clicked received:(BOOL)received)

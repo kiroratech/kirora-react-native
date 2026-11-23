@@ -45,6 +45,11 @@ export function jsonSnapshot(value: unknown): unknown {
   return copy(value);
 }
 
+/** Whether `value` is a promise or another thenable. */
+export function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return typeof (value as PromiseLike<unknown> | null | undefined)?.then === 'function';
+}
+
 /** A plain object: not null, an array, or something like a Date. False when a getter it runs throws. */
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
   try {
