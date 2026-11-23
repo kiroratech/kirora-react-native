@@ -8,7 +8,7 @@ for Kirora push. One TypeScript API over Kirora's native Android and iOS SDKs, w
 events and handle sessions, consent, retries and notifications.
 
 **0.1.0**, the first release. A successful JavaScript call does not prove delivery: test the
-native artifacts your app resolves ([CHANGELOG](CHANGELOG.md) lists what has been verified).
+native artifacts your app resolves.
 
 ## Requirements
 
